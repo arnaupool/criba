@@ -233,9 +233,8 @@ async def download_subscription(sub: dict, dest: Path) -> tuple[int, str, str, s
         return 1, "No hay nada que mirar sin cookies", "; ".join(notes), sub.get("parts_done")
     include = ["-o", f"include={','.join(parts)}"] if parts else []
 
-    async def mark_seen(which: list[str] | None, upto: int = BASELINE_SCAN, since: str | None = None) -> int:
-        """Marca como visto lo ya publicado sin descargarlo. Con since, antes descarga lo publicado
-        desde esa fecha (p. ej. desde que se sigue el perfil). Las historias nunca se marcan: duran
+    async def mark_seen(which: list[str] | None, upto: int = BASELINE_SCAN) -> int:
+        """Marca como visto lo ya publicado sin descargarlo. Las historias nunca se marcan: duran
         24 h, así que siempre son recientes y se descargan."""
         if which:
             which = [p for p in which if p != "stories"]
@@ -243,16 +242,21 @@ async def download_subscription(sub: dict, dest: Path) -> tuple[int, str, str, s
                 return 0
         inc = ["-o", f"include={','.join(which)}"] if which else []
         what = f" de {_labels(which)}" if which else ""
-        code = 0
-        if since:
-            c, out = await _run(args + inc + ["--filter", _since_filter(since), "--range", f"1-{upto}", sub["url"]])
-            logs.append(f"$ descargar{what} lo publicado desde que lo sigues\n{out}")
-            code = c
         before = _archive_count(archive)
         c, out = await _run(args + inc + ["--no-download", "--range", f"1-{upto}", sub["url"]])
         notes.append(f"Marcados {_archive_count(archive) - before} archivos anteriores{what} como vistos")
         logs.append(f"$ marcar como visto{what}\n{out}")
-        return code or c
+        return c
+
+    async def catch_up(which: list[str] | None) -> int:
+        """Secciones recién activadas o «Recuperar desde que lo sigo»: se descargan los BASELINE_SCAN
+        primeros y el worker descarta al ingerir lo anterior a seguir el perfil. Sin --filter de fecha:
+        gallery-dl lo aplica antes que --range y recorrería el perfil entero buscando coincidencias."""
+        inc = ["-o", f"include={','.join(which)}"] if which else []
+        what = f" de {_labels(which)}" if which else ""
+        c, out = await _run(args + inc + ["--range", f"1-{BASELINE_SCAN}", sub["url"]])
+        logs.append(f"$ revisar{what} desde que lo sigues\n{out}")
+        return c
 
     async def stories_now() -> int:
         """Al activar las historias, bajar ya las que haya (si no, pueden caducar antes de la siguiente)."""
@@ -276,18 +280,17 @@ async def download_subscription(sub: dict, dest: Path) -> tuple[int, str, str, s
             code = await mark_seen(parts or None, n + BASELINE_SCAN) or code
         return code, "\n".join(logs), "; ".join(notes), ",".join(parts) or None
 
-    # secciones activadas después (p. ej. reels o historias): se descarga lo publicado desde que se
-    # sigue el perfil y lo anterior se marca como visto
+    # secciones activadas después (p. ej. reels o historias) o «Recuperar desde que lo sigo»
     done = [p for p in (sub.get("parts_done") or "").split(",") if p]
-    if not archive.exists():  # «Recuperar desde que lo sigo» (o archivo perdido): empezar de nuevo
+    if not archive.exists():  # recuperar (o archivo perdido): empezar de nuevo
         done = []
-        if not parts and await mark_seen(None, since=sub["created_at"]):
+        if not parts and await catch_up(None):
             return 1, "\n".join(logs), "; ".join(notes), None
     new_parts = [p for p in parts if p not in done]
     if parts and new_parts:
-        if await mark_seen(new_parts, since=sub["created_at"]) == 0:
+        if await catch_up(new_parts) == 0:
             done += new_parts
-    # Sin --filter de fecha aquí: lo filtrado no cuenta para skip=abort y recorrería el perfil entero.
+    # Sin --filter de fecha: lo filtrado no cuenta para skip=abort y recorrería el perfil entero.
     # Lo anterior a seguir el perfil (p. ej. una publicación antigua recién fijada) se descarta al ingerir.
     code, out = await _run(args + include + ["-o", f"skip=abort:{SKIP_ABORT}", sub["url"]])
     logs.append(out)
@@ -298,14 +301,6 @@ def _utc(iso: str) -> datetime:
     """Fecha ISO, con o sin zona (las de gallery-dl vienen sin zona y son UTC), en UTC."""
     d = datetime.fromisoformat(iso)
     return d.replace(tzinfo=timezone.utc) if d.tzinfo is None else d.astimezone(timezone.utc)
-
-
-def _since_filter(iso: str) -> str:
-    """Filtro de gallery-dl: publicado desde esa fecha ISO (gallery-dl compara en UTC).
-    Lo que no trae fecha pasa, para no perder nada en sitios que no la dan."""
-    d = datetime.fromisoformat(iso).astimezone(timezone.utc)
-    when = f"datetime({d.year}, {d.month}, {d.day}, {d.hour}, {d.minute}, {d.second})"
-    return f'"date" not in locals() or not date or date >= {when}'
 
 
 # ---------------------------------------------------------------- metadatos
