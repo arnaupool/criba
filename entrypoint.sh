@@ -13,4 +13,4 @@ if [ "${AUTO_UPDATE:-1}" = "1" ]; then
     || echo "No se pudo actualizar (se usa la versión de la imagen)"
 fi
 
-exec python -m uvicorn app.main:app --host 0.0.0.0 --port "${PORT:-8080}" --proxy-headers --forwarded-allow-ips='*'
+exec python -m uvicorn app.main:app --host 0.0.0.0 --port "${PORT:-8080}" --proxy-headers --forwarded-allow-ips='*' --no-access-log

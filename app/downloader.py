@@ -1,5 +1,6 @@
 """Descargas con gallery-dl / yt-dlp e ingesta en la cola de revisión."""
 import asyncio
+import contextvars
 import hashlib
 import json
 import logging
@@ -19,8 +20,10 @@ from .library import clean_name, unique_path
 
 log = logging.getLogger("criba.dl")
 
-# Al empezar a seguir: cuántos archivos baja sin descargar ya existentes como "vistos"
-BASELINE_SCAN = 300
+# Al empezar a seguir: cuántos archivos ya existentes se marcan como "vistos" sin descargarlos.
+# Basta con cubrir de sobra los SKIP_ABORT primeros (y las fijadas): cada comprobación se detiene
+# en cuanto encuentra SKIP_ABORT ya vistos seguidos, así que nunca llega más abajo.
+BASELINE_SCAN = 50
 # Archivos ya vistos seguidos tras los que se deja de recorrer el perfil
 SKIP_ABORT = 6
 
@@ -74,16 +77,41 @@ def _env() -> dict:
     return env
 
 
+# Trabajo en curso: lo fija el worker para que _run vaya guardando el registro en directo
+current_job: contextvars.ContextVar[int | None] = contextvars.ContextVar("current_job", default=None)
+LIVE_EVERY = 3  # segundos entre volcados del registro en directo
+
+
 async def _run(args: list[str], timeout: int = 3600) -> tuple[int, str]:
     log.info("Ejecutando: %s", " ".join(args[2:]))
     proc = await asyncio.create_subprocess_exec(
         *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT, env=_env())
+    job_id = current_job.get()
+    row = db.one("SELECT log FROM jobs WHERE id=?", (job_id,)) if job_id else None
+    prefix = (row or {}).get("log") or ""
+    lines: list[str] = []
+    loop = asyncio.get_running_loop()
+    deadline, last_dump = loop.time() + timeout, 0.0
+
+    async def read():
+        nonlocal last_dump
+        while raw := await proc.stdout.readline():
+            lines.append(raw.decode("utf-8", "replace").rstrip("\n"))
+            if job_id and loop.time() - last_dump > LIVE_EVERY:
+                last_dump = loop.time()
+                db.x("UPDATE jobs SET log=? WHERE id=?", (tail(prefix + "\n".join(lines)), job_id))
+        await proc.wait()
+
     try:
-        out, _ = await asyncio.wait_for(proc.communicate(), timeout)
+        await asyncio.wait_for(read(), max(1, deadline - loop.time()))
     except asyncio.TimeoutError:
         proc.kill()
-        return -1, "Tiempo de espera agotado"
-    return proc.returncode, out.decode("utf-8", "replace")
+        lines.append("Tiempo de espera agotado")
+        return -1, "\n".join(lines)
+    out = "\n".join(lines)
+    if job_id:  # lo siguiente que se ejecute en este trabajo se añade detrás
+        db.x("UPDATE jobs SET log=? WHERE id=?", (tail(prefix + out + "\n"), job_id))
+    return proc.returncode, out
 
 
 def _gdl_args(url: str, dest: Path) -> list[str]:
@@ -167,10 +195,10 @@ async def download_subscription(sub: dict, dest: Path) -> tuple[int, str, str, s
         return 1, "No hay nada que mirar sin cookies", "; ".join(notes), sub.get("parts_done")
     include = ["-o", f"include={','.join(parts)}"] if parts else []
 
-    async def mark_seen(which: list[str] | None) -> tuple[int, str]:
+    async def mark_seen(which: list[str] | None, upto: int = BASELINE_SCAN) -> tuple[int, str]:
         before = _archive_count(archive)
         inc = ["-o", f"include={','.join(which)}"] if which else []
-        code, out = await _run(args + inc + ["--no-download", "--range", f"1-{BASELINE_SCAN}", sub["url"]])
+        code, out = await _run(args + inc + ["--no-download", "--range", f"1-{upto}", sub["url"]])
         what = f" de {_labels(which)}" if which else ""
         notes.append(f"Marcados {_archive_count(archive) - before} archivos existentes{what} como vistos")
         logs.append(f"$ marcar como visto{what}\n{out}")
@@ -186,7 +214,7 @@ async def download_subscription(sub: dict, dest: Path) -> tuple[int, str, str, s
         else:  # últimos N: se descargan y el resto se marca como visto para no bajarlo en la siguiente pasada
             code, out = await _run(args + include + ["--range", f"1-{n}", sub["url"]], timeout=6 * 3600)
             logs.append(out)
-            code = (await mark_seen(parts or None))[0] or code
+            code = (await mark_seen(parts or None, n + BASELINE_SCAN))[0] or code
         return code, "\n".join(logs), "; ".join(notes), ",".join(parts) or None
 
     # secciones añadidas después (p. ej. reels o historias): lo que ya existía se marca como visto

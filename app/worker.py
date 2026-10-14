@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 from . import notify
 from .db import db, now
-from .downloader import (cleanup_tmp, device_dir, download_link, download_subscription, ingest, job_tmp,
+from .downloader import (cleanup_tmp, current_job, device_dir, download_link, download_subscription, ingest, job_tmp,
                          last_error_line, prepare_device_files, purge_device, site_of, tail)
 from .library import purge_trash
 
@@ -143,12 +143,22 @@ async def worker(kind: str):
             except asyncio.TimeoutError:
                 pass
             continue
+        token = current_job.set(job["id"])
         try:
             await handler(job)
         except Exception as e:  # noqa: BLE001
             log.exception("Fallo en el trabajo %s", job["id"])
             db.x("UPDATE jobs SET status='error', finished_at=?, log=? WHERE id=?",
                  (now(), f"Error interno: {e!r}", job["id"]))
+            if job["subscription_id"]:  # sin esto el planificador lo volvería a encolar cada minuto
+                sub = db.one("SELECT interval_min FROM subscriptions WHERE id=?", (job["subscription_id"],))
+                if sub:
+                    nxt = datetime.now(timezone.utc) + timedelta(minutes=sub["interval_min"])
+                    db.x("UPDATE subscriptions SET next_check=?, last_check=?, last_error=? WHERE id=?",
+                         (nxt.isoformat(timespec="seconds"), now(), f"Error interno: {e!r}"[:300],
+                          job["subscription_id"]))
+        finally:
+            current_job.reset(token)
 
 
 async def scheduler():
@@ -174,4 +184,4 @@ async def scheduler():
 
 def recover():
     """Al arrancar, los trabajos que quedaron a medias vuelven a la cola."""
-    db.x("UPDATE jobs SET status='queued', started_at=NULL WHERE status='running'")
+    db.x("UPDATE jobs SET status='queued', started_at=NULL, log=NULL WHERE status='running'")

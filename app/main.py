@@ -22,6 +22,8 @@ from .thumbs import make_thumb
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("criba")
+# httpx registra cada URL de la API de Telegram, que lleva el token del bot dentro
+logging.getLogger("httpx").setLevel(logging.WARNING)
 STATIC = Path(__file__).parent / "static"
 
 

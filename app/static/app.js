@@ -800,7 +800,7 @@ async function loadJobs() {
     let res = "";
     if (j.status === "done") res = j.note && !j.new_items ? esc(j.note)
       : `${j.new_items} nuevo${j.new_items !== 1 ? "s" : ""}${j.dup_items ? ` · ${j.dup_items} repetidos` : ""}`;
-    if (j.status === "running") res = "descargando…";
+    if (j.status === "running") res = `en marcha desde ${ago(j.started_at)} · el registro se va rellenando`;
     if (j.status === "queued") res = "en espera";
     if (j.status === "error") res = "falló";
     return `<div class="card job" data-id="${j.id}">
