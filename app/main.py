@@ -12,7 +12,7 @@ from fastapi import Body, FastAPI, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import bot, config, library, worker
+from . import bot, config, library, tgreview, worker
 from .config import COOKIES, DATA, LIBRARY, UI_PASSWORD
 from .db import db, now
 from .downloader import COOKIE_FILE, tool_versions, update_tools
@@ -230,17 +230,22 @@ async def move(ids: list[int] = Body(...), folder: str = Body(...), new_folder: 
         moved = await asyncio.to_thread(library.move_items, ids, folder)
     except library.PathError as e:
         raise HTTPException(400, str(e))
+    await tgreview.refresh_items(ids)  # los mensajes del bot reflejan la decisión
     return {"moved": moved, "folder": folder}
 
 
 @app.post("/api/items/trash")
 async def trash(ids: list[int] = Body(..., embed=True)):
-    return {"trashed": await asyncio.to_thread(library.trash_items, ids)}
+    n = await asyncio.to_thread(library.trash_items, ids)
+    await tgreview.refresh_items(ids)
+    return {"trashed": n}
 
 
 @app.post("/api/items/restore")
 async def restore(ids: list[int] = Body(..., embed=True)):
-    return {"restored": await asyncio.to_thread(library.restore_items, ids)}
+    n = await asyncio.to_thread(library.restore_items, ids)
+    await tgreview.refresh_items(ids)
+    return {"restored": n}
 
 
 @app.post("/api/trash/empty")

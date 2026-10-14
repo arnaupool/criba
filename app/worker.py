@@ -59,11 +59,15 @@ async def _process_link(job: dict):
     ok = bool(ids or dups)
     db.x("UPDATE jobs SET status=?, finished_at=?, new_items=?, dup_items=?, log=? WHERE id=?",
          ("done" if ok else "error", now(), len(ids), dups, tail(out), job["id"]))
-    if job["chat_id"]:
+    if job["chat_id"] and ids:
+        from . import tgreview  # import tardío: necesita python-telegram-bot
+        if job["message_id"]:
+            await tgreview.attach(job["chat_id"], job["message_id"], f"🔗 {job['url']}", ids)
+        else:
+            await tgreview.send(job["chat_id"], f"🔗 {job['url']}", ids)
+    elif job["chat_id"]:
         if ok:
-            text = f"✅ {_summary(len(ids), dups)}"
-            if link := notify.ui_link():
-                text += f"\n{link}"
+            text = f"♻️ Ya lo tenías: {dups} repetido{'s' if dups != 1 else ''}\n{job['url']}"
         else:
             text = f"❌ No he podido descargar nada de\n{job['url']}\n\n{last_error_line(out)}"
         if job["message_id"]:

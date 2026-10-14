@@ -72,6 +72,22 @@ CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT
 );
+
+-- Mensajes de Telegram con botones de revisión y los elementos que abarca cada uno
+CREATE TABLE IF NOT EXISTS tg_batches (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    chat_id INTEGER NOT NULL,
+    message_id INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    folders TEXT NOT NULL,         -- JSON: carpetas de los botones rápidos
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS tg_batch_items (
+    batch_id INTEGER NOT NULL REFERENCES tg_batches(id) ON DELETE CASCADE,
+    item_id INTEGER NOT NULL,
+    PRIMARY KEY (batch_id, item_id)
+);
+CREATE INDEX IF NOT EXISTS tg_batch_items_item ON tg_batch_items(item_id);
 """
 
 

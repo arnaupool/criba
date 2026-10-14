@@ -5,13 +5,14 @@ import re
 
 from telegram import Update
 from telegram.constants import ChatAction
-from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
+from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 
 from . import notify
 from .config import TELEGRAM_ALLOWED_IDS, TELEGRAM_TOKEN
 from .db import db
 from .downloader import cleanup_tmp, ingest, job_tmp
 from .subscriptions import add_subscription, parse_initial
+from .tgreview import attach, on_callback, send as send_review
 from .worker import enqueue_link
 
 log = logging.getLogger("criba.bot")
@@ -142,7 +143,8 @@ async def on_media(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     finally:
         cleanup_tmp(tmp)
     if ids:
-        await msg.reply_text("✅ Añadido a la cola")
+        reply = await msg.reply_text("✅ Añadido a la cola")
+        await attach(msg.chat_id, reply.message_id, "📎 Archivo de Telegram", ids)
     elif dups:
         await msg.reply_text("♻️ Ya lo tenías (repetido)")
     else:
@@ -153,11 +155,8 @@ async def notify_new_items(sub: dict, ids: list[int]):
     from .config import NOTIFY_NEW
     if not NOTIFY_NEW:
         return
-    n = len(ids)
-    text = f"🆕 {sub['name']}: {n} nuevo{'s' if n != 1 else ''} en la cola"
-    if link := notify.ui_link(f"?sub={sub['id']}"):
-        text += f"\n{link}"
-    await notify.send(text)
+    for chat_id in sorted(TELEGRAM_ALLOWED_IDS):
+        await send_review(chat_id, f"🆕 {sub['name']}", ids, suggested=sub["folder"])
 
 
 async def start():
@@ -171,6 +170,7 @@ async def start():
     app.add_handler(CommandHandler("cola", cmd_cola))
     app.add_handler(CommandHandler("seguir", cmd_seguir))
     app.add_handler(CommandHandler("seguimientos", cmd_seguimientos))
+    app.add_handler(CallbackQueryHandler(on_callback, pattern=r"^cb:"))
     app.add_handler(MessageHandler(
         filters.PHOTO | filters.VIDEO | filters.ANIMATION | filters.VIDEO_NOTE | filters.Document.ALL, on_media))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
