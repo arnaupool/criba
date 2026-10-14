@@ -1,19 +1,19 @@
 <?xml version="1.0"?>
 <Container version="2">
   <Name>criba</Name>
-  <Repository>ghcr.io/TU_USUARIO_GITHUB/criba:latest</Repository>
-  <Registry>https://github.com/TU_USUARIO_GITHUB/criba/pkgs/container/criba</Registry>
+  <Repository>ghcr.io/arnaupool/criba:latest</Repository>
+  <Registry>https://github.com/arnaupool/criba/pkgs/container/criba</Registry>
   <Network>bridge</Network>
   <MyIP/>
   <Shell>sh</Shell>
   <Privileged>false</Privileged>
-  <Support>https://github.com/TU_USUARIO_GITHUB/criba/issues</Support>
-  <Project>https://github.com/TU_USUARIO_GITHUB/criba</Project>
+  <Support>https://github.com/arnaupool/criba/issues</Support>
+  <Project>https://github.com/arnaupool/criba</Project>
   <Overview>Descarga fotos y vídeos de enlaces (bot de Telegram, web o marcador) y de los perfiles que sigas (Instagram, X, Reddit, TikTok, Bluesky…) a una cola de revisión. Desde la web decides si borrar cada archivo o guardarlo en una carpeta de tu biblioteca.</Overview>
   <Category>Downloaders: MediaApp:Photos</Category>
   <WebUI>http://[IP]:[PORT:8080]/</WebUI>
-  <TemplateURL>https://raw.githubusercontent.com/TU_USUARIO_GITHUB/criba/main/unraid/criba.xml</TemplateURL>
-  <Icon>https://raw.githubusercontent.com/TU_USUARIO_GITHUB/criba/main/app/static/icon.png</Icon>
+  <TemplateURL>https://raw.githubusercontent.com/arnaupool/criba/main/unraid/criba.xml</TemplateURL>
+  <Icon>https://raw.githubusercontent.com/arnaupool/criba/main/app/static/icon.png</Icon>
   <ExtraParams/>
   <PostArgs/>
   <CPUset/>

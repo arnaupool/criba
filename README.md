@@ -14,8 +14,8 @@ actualizan solos en cada arranque.
 
 ## Instalación en Unraid
 
-1. **Sube este repositorio a GitHub** (por ejemplo `TU_USUARIO_GITHUB/criba`). La Action de `.github/workflows/docker.yml`
-   construye la imagen y la publica en `ghcr.io/TU_USUARIO_GITHUB/criba:latest` en cada cambio.
+1. **Sube este repositorio a GitHub** (por ejemplo `arnaupool/criba`). La Action de `.github/workflows/docker.yml`
+   construye la imagen y la publica en `ghcr.io/arnaupool/criba:latest` en cada cambio.
 2. La primera vez, en GitHub → tu perfil → *Packages* → `criba` → *Package settings*, pon el paquete como **Public**
    (así Unraid lo descarga sin iniciar sesión).
 3. En Unraid, guarda `unraid/criba.xml` como `/boot/config/plugins/dockerMan/templates-user/my-criba.xml`

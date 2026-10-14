@@ -1,7 +1,7 @@
 # Alternativa a la plantilla de Unraid (plugin Compose Manager o cualquier Docker).
 services:
   criba:
-    image: ghcr.io/TU_USUARIO_GITHUB/criba:latest
+    image: ghcr.io/arnaupool/criba:latest
     container_name: criba
     restart: unless-stopped
     ports:
