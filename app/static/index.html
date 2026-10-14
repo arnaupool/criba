@@ -89,6 +89,13 @@
       <input name="url" placeholder="Pega uno o varios enlaces…" required>
       <button class="btn primary" type="submit">Descargar</button>
     </form>
+    <div class="row end jobs-tools">
+      <span class="muted small">Se borran solas a los 30 días. Borrar una descarga no toca lo que ya está en la cola.</span>
+      <span>
+        <button class="btn small" id="jobs-clear-error">Borrar fallidas</button>
+        <button class="btn small ghost" id="jobs-clear-all">Borrar terminadas</button>
+      </span>
+    </div>
     <div id="jobs"></div>
   </section>
 

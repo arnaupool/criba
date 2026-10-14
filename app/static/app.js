@@ -673,7 +673,8 @@ async function loadJobs() {
       <div class="st">${JOB_ICON[j.status] || ""}</div>
       <div><div class="what">${what}</div><div class="when">${ago(j.created_at)} · ${j.origin || ""} · ${res}</div></div>
       <div>${j.log ? `<button class="btn small ghost" data-log="${j.id}">Registro</button>` : ""}
-        ${j.status === "error" ? `<button class="btn small" data-retry="${j.id}">Reintentar</button>` : ""}</div>
+        ${j.status === "error" ? `<button class="btn small" data-retry="${j.id}">Reintentar</button>` : ""}
+        ${j.status === "done" || j.status === "error" ? `<button class="btn small ghost" data-deljob="${j.id}" title="Borrar de la lista" aria-label="Borrar de la lista">✕</button>` : ""}</div>
       ${j.log ? `<pre data-id="${j.id}" class="${open.has(String(j.id)) ? "" : "hidden"}">${esc(j.log)}</pre>` : ""}
     </div>`;
   }).join("")}</div>` : `<p class="muted">Aún no hay descargas.</p>`;
@@ -684,7 +685,20 @@ $("#jobs").addEventListener("click", async e => {
   if (l) $(`#jobs pre[data-id="${l.dataset.log}"]`).classList.toggle("hidden");
   const r = e.target.closest("[data-retry]");
   if (r) { try { await api(`/api/jobs/${r.dataset.retry}/retry`, { method: "POST" }); loadJobs(); } catch (err) { fail(err); } }
+  const d = e.target.closest("[data-deljob]");
+  if (d) {
+    try { await api(`/api/jobs/${d.dataset.deljob}`, { method: "DELETE" }); d.closest(".job").remove(); } catch (err) { fail(err); }
+  }
 });
+async function clearJobs(status, label) {
+  try {
+    const r = await api("/api/jobs/clear", { method: "POST", json: { status } });
+    toast(`🧹 ${r.deleted} ${label} borrada${r.deleted !== 1 ? "s" : ""}`);
+    loadJobs();
+  } catch (err) { fail(err); }
+}
+$("#jobs-clear-error").onclick = () => clearJobs("error", "fallida");
+$("#jobs-clear-all").onclick = () => clearJobs("finished", "descarga");
 
 // ------------------------------------------------------------ AJUSTES
 async function loadSettings() {

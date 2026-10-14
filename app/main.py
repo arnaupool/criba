@@ -66,7 +66,11 @@ def _valid_session(value: str | None) -> bool:
 @app.middleware("http")
 async def auth(request: Request, call_next):
     if not UI_PASSWORD or request.url.path in PUBLIC_PATHS or _valid_session(request.cookies.get(COOKIE)):
-        return await call_next(request)
+        resp = await call_next(request)
+        if request.url.path.startswith("/static/"):
+            # revalidar siempre: tras actualizar el contenedor no debe quedarse el JS/CSS viejo
+            resp.headers["Cache-Control"] = "no-cache"
+        return resp
     if request.url.path.startswith("/api/"):
         return JSONResponse({"detail": "Sesión caducada"}, status_code=401)
     nxt = request.url.path + (f"?{request.url.query}" if request.url.query else "")
@@ -281,6 +285,20 @@ async def jobs(limit: int = 50):
     rows = db.q("SELECT j.*, s.name sub_name FROM jobs j LEFT JOIN subscriptions s ON s.id=j.subscription_id "
                 "ORDER BY j.id DESC LIMIT ?", (min(limit, 300),))
     return {"jobs": rows}
+
+
+@app.delete("/api/jobs/{jid}")
+async def delete_job(jid: int):
+    """Quita una descarga terminada o fallida de la lista (no toca los archivos ya en la cola)."""
+    return {"deleted": db.x("DELETE FROM jobs WHERE id=? AND status IN ('done','error')", (jid,))}
+
+
+@app.post("/api/jobs/clear")
+async def clear_jobs(status: str = Body("error", embed=True)):
+    if status not in ("error", "done", "finished"):
+        raise HTTPException(400, "Estado no válido")
+    states = ("done", "error") if status == "finished" else (status, status)
+    return {"deleted": db.x("DELETE FROM jobs WHERE status IN (?, ?)", states)}
 
 
 @app.post("/api/jobs/{jid}/retry")
