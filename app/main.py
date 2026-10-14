@@ -115,9 +115,16 @@ async def logout():
 
 # ------------------------------------------------------------------ páginas
 
+# ?v=… en el JS y el CSS: tras actualizar, el navegador no puede seguir usando la copia vieja
+ASSET_V = config.VERSION if config.VERSION != "dev" else str(int(time.time()))
+INDEX_HTML = ((STATIC / "index.html").read_text(encoding="utf-8")
+              .replace('"/static/app.js"', f'"/static/app.js?v={ASSET_V}"')
+              .replace('"/static/style.css"', f'"/static/style.css?v={ASSET_V}"'))
+
+
 @app.get("/", response_class=HTMLResponse)
 async def index():
-    return FileResponse(STATIC / "index.html", headers={"Cache-Control": "no-cache"})
+    return HTMLResponse(INDEX_HTML, headers={"Cache-Control": "no-cache"})
 
 
 @app.get("/manifest.webmanifest")
@@ -342,15 +349,24 @@ async def jobs(limit: int = 50):
 @app.delete("/api/jobs/{jid}")
 async def delete_job(jid: int):
     """Quita una descarga terminada o fallida de la lista (no toca los archivos ya en la cola)."""
-    return {"deleted": db.x("DELETE FROM jobs WHERE id=? AND status IN ('done','error')", (jid,))}
+    return {"deleted": db.x("DELETE FROM jobs WHERE id=? AND status IN ('done','error','cancelled')", (jid,))}
+
+
+@app.post("/api/jobs/{jid}/cancel")
+async def cancel_job(jid: int):
+    state = worker.cancel(jid)
+    if state is None:
+        raise HTTPException(400, "Esa descarga ya había terminado")
+    return {"state": state}
 
 
 @app.post("/api/jobs/clear")
 async def clear_jobs(status: str = Body("error", embed=True)):
     if status not in ("error", "done", "finished"):
         raise HTTPException(400, "Estado no válido")
-    states = ("done", "error") if status == "finished" else (status, status)
-    return {"deleted": db.x("DELETE FROM jobs WHERE status IN (?, ?)", states)}
+    states = {"error": ("error", "cancelled"), "done": ("done",), "finished": ("done", "error", "cancelled")}[status]
+    marks = ",".join("?" * len(states))
+    return {"deleted": db.x(f"DELETE FROM jobs WHERE status IN ({marks})", states)}
 
 
 @app.post("/api/jobs/{jid}/retry")
@@ -410,6 +426,19 @@ async def update_sub(sid: int, data: dict = Body(...)):
 
 @app.post("/api/subs/{sid}/check")
 async def check_sub(sid: int):
+    return {"job": worker.enqueue_sub(sid, "web")}
+
+
+@app.post("/api/subs/{sid}/resync")
+async def resync_sub(sid: int):
+    """Olvida lo marcado como visto y vuelve a bajar lo publicado desde que se sigue el perfil.
+    Lo que ya pasó por la cola no se repite: los duplicados se descartan por contenido."""
+    if not db.one("SELECT id FROM subscriptions WHERE id=?", (sid,)):
+        raise HTTPException(404, "No existe")
+    if db.one("SELECT id FROM jobs WHERE subscription_id=? AND status IN ('queued','running')", (sid,)):
+        raise HTTPException(400, "Hay una comprobación en marcha: espera a que acabe o cancélala")
+    (config.ARCHIVES / f"sub_{sid}.sqlite").unlink(missing_ok=True)
+    db.x("UPDATE subscriptions SET parts_done=NULL WHERE id=?", (sid,))
     return {"job": worker.enqueue_sub(sid, "web")}
 
 

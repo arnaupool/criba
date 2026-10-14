@@ -5,9 +5,11 @@ import random
 from datetime import datetime, timedelta, timezone
 
 from . import notify
+from .config import TMP
 from .db import db, now
-from .downloader import (cleanup_tmp, current_job, device_dir, download_link, download_subscription, ingest, job_tmp,
-                         last_error_line, prepare_device_files, purge_device, site_of, tail)
+from .downloader import (JobCancelled, cancel_job, cleanup_tmp, current_job, device_dir, download_link,
+                         download_subscription, forget_cancel, ingest, job_tmp, last_error_line, prepare_device_files,
+                         purge_device, site_of, tail)
 from .library import purge_trash
 
 log = logging.getLogger("criba.worker")
@@ -146,6 +148,8 @@ async def worker(kind: str):
         token = current_job.set(job["id"])
         try:
             await handler(job)
+        except JobCancelled:
+            await _mark_cancelled(job)
         except Exception as e:  # noqa: BLE001
             log.exception("Fallo en el trabajo %s", job["id"])
             db.x("UPDATE jobs SET status='error', finished_at=?, log=? WHERE id=?",
@@ -159,6 +163,35 @@ async def worker(kind: str):
                           job["subscription_id"]))
         finally:
             current_job.reset(token)
+            forget_cancel(job["id"])
+
+
+async def _mark_cancelled(job: dict):
+    row = db.one("SELECT log FROM jobs WHERE id=?", (job["id"],)) or {}
+    db.x("UPDATE jobs SET status='cancelled', finished_at=?, log=? WHERE id=?",
+         (now(), tail((row.get("log") or "") + "\n⛔ Cancelada"), job["id"]))
+    cleanup_tmp(TMP / f"job_{job['id']}")
+    if job["subscription_id"]:  # la siguiente comprobación, a su hora normal
+        sub = db.one("SELECT interval_min FROM subscriptions WHERE id=?", (job["subscription_id"],))
+        if sub:
+            nxt = datetime.now(timezone.utc) + timedelta(minutes=sub["interval_min"])
+            db.x("UPDATE subscriptions SET next_check=?, last_check=? WHERE id=?",
+                 (nxt.isoformat(timespec="seconds"), now(), job["subscription_id"]))
+    if job["chat_id"] and job["message_id"]:
+        await notify.edit(job["chat_id"], job["message_id"], f"⛔ Descarga cancelada\n{job['url']}")
+
+
+def cancel(job_id: int) -> str | None:
+    """Cancela un trabajo en espera o en marcha. Devuelve el estado en que queda, o None si ya había acabado."""
+    job = db.one("SELECT * FROM jobs WHERE id=?", (job_id,))
+    if not job or job["status"] not in ("queued", "running"):
+        return None
+    if job["status"] == "queued" and db.x(
+            "UPDATE jobs SET status='cancelled', finished_at=?, log='⛔ Cancelada antes de empezar' "
+            "WHERE id=? AND status='queued'", (now(), job_id)):
+        return "cancelled"
+    cancel_job(job_id)  # en marcha: el worker lo verá al terminar el paso actual (se mata ya)
+    return "cancelling"
 
 
 async def scheduler():

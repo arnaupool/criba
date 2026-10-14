@@ -730,6 +730,7 @@ async function loadSubs() {
       <div></div>
       <div class="acts">
         <button class="btn small" data-act="check">🔄 Comprobar ahora</button>
+        <button class="btn small" data-act="resync" title="Vuelve a bajar lo publicado desde que lo sigues">🔁 Recuperar desde que lo sigo</button>
         <button class="btn small" data-act="toggle">${s.enabled ? "⏸ Pausar" : "▶ Reanudar"}</button>
         <select class="btn small" data-act="interval" aria-label="Intervalo">
           ${[15, 30, 60, 120, 180, 360, 720, 1440].concat([s.interval_min]).filter((v, i, a) => a.indexOf(v) === i).sort((a, b) => a - b)
@@ -751,6 +752,12 @@ $("#subs").addEventListener("click", async e => {
   const s = S.subs.find(x => x.id === id);
   try {
     if (b.dataset.act === "check") { await api(`/api/subs/${id}/check`, { method: "POST" }); toast("🔄 Comprobación en cola"); }
+    if (b.dataset.act === "resync") {
+      if (!confirm(`¿Volver a revisar «${s.name}» desde que lo sigues (${fmtDate(s.created_at)})?\n\n`
+        + "Se descargará lo publicado desde entonces que no tengas ya. Lo que ya pasó por la cola no se repite.")) return;
+      await api(`/api/subs/${id}/resync`, { method: "POST" });
+      toast("🔁 Recuperación en cola");
+    }
     if (b.dataset.act === "toggle") await api(`/api/subs/${id}`, { method: "PATCH", json: { enabled: !s.enabled } });
     if (b.dataset.act === "rename") {
       const n = prompt("Nombre", s.name);
@@ -787,13 +794,16 @@ $("#subs").addEventListener("change", async e => {
 });
 
 // ------------------------------------------------------------ DESCARGAS
-const JOB_ICON = { queued: "🕓", running: "⏳", done: "✅", error: "❌" };
+const JOB_ICON = { queued: "🕓", running: "⏳", done: "✅", error: "❌", cancelled: "⛔" };
 let jobsTimer;
 async function loadJobs() {
   clearTimeout(jobsTimer);
   let d;
   try { d = await api("/api/jobs?limit=80"); } catch (e) { return fail(e); }
-  const open = new Set($$("#jobs pre").map(p => p.dataset.id));
+  const open = new Set($$("#jobs pre:not(.hidden)").map(p => p.dataset.id));
+  // el registro en directo se repinta cada 3 s: conservar el scroll (y seguir el final si estaba abajo)
+  const scroll = Object.fromEntries($$("#jobs pre:not(.hidden)").map(p =>
+    [p.dataset.id, p.scrollTop + p.clientHeight >= p.scrollHeight - 8 ? "end" : p.scrollTop]));
   $("#jobs").innerHTML = d.jobs.length ? `<div class="list">${d.jobs.map(j => {
     const what = j.kind === "sub" ? `👀 ${esc(j.sub_name || "seguimiento borrado")}`
       : `${j.kind === "device" ? "📱 " : ""}<a href="${esc(j.url)}" target="_blank" rel="noopener">${esc(j.url)}</a>`;
@@ -803,15 +813,21 @@ async function loadJobs() {
     if (j.status === "running") res = `en marcha desde ${ago(j.started_at)} · el registro se va rellenando`;
     if (j.status === "queued") res = "en espera";
     if (j.status === "error") res = "falló";
+    if (j.status === "cancelled") res = "cancelada";
     return `<div class="card job" data-id="${j.id}">
       <div class="st">${JOB_ICON[j.status] || ""}</div>
       <div><div class="what">${what}</div><div class="when">${ago(j.created_at)} · ${j.origin || ""} · ${res}</div></div>
       <div>${j.log ? `<button class="btn small ghost" data-log="${j.id}">Registro</button>` : ""}
-        ${j.status === "error" ? `<button class="btn small" data-retry="${j.id}">Reintentar</button>` : ""}
-        ${j.status === "done" || j.status === "error" ? `<button class="btn small ghost" data-deljob="${j.id}" title="Borrar de la lista" aria-label="Borrar de la lista">✕</button>` : ""}</div>
+        ${j.status === "error" || j.status === "cancelled" ? `<button class="btn small" data-retry="${j.id}">Reintentar</button>` : ""}
+        ${j.status === "running" || j.status === "queued" ? `<button class="btn small danger" data-cancel="${j.id}">Cancelar</button>` : ""}
+        ${["done", "error", "cancelled"].includes(j.status) ? `<button class="btn small ghost" data-deljob="${j.id}" title="Borrar de la lista" aria-label="Borrar de la lista">✕</button>` : ""}</div>
       ${j.log ? `<pre data-id="${j.id}" class="${open.has(String(j.id)) ? "" : "hidden"}">${esc(j.log)}</pre>` : ""}
     </div>`;
   }).join("")}</div>` : `<p class="muted">Aún no hay descargas.</p>`;
+  for (const [id, pos] of Object.entries(scroll)) {
+    const pre = $(`#jobs pre[data-id="${id}"]`);
+    if (pre) pre.scrollTop = pos === "end" ? pre.scrollHeight : pos;
+  }
   if (S.view === "descargas") jobsTimer = setTimeout(loadJobs, d.jobs.some(j => j.status === "running" || j.status === "queued") ? 3000 : 15000);
 }
 $("#jobs").addEventListener("click", async e => {
@@ -819,6 +835,16 @@ $("#jobs").addEventListener("click", async e => {
   if (l) $(`#jobs pre[data-id="${l.dataset.log}"]`).classList.toggle("hidden");
   const r = e.target.closest("[data-retry]");
   if (r) { try { await api(`/api/jobs/${r.dataset.retry}/retry`, { method: "POST" }); loadJobs(); } catch (err) { fail(err); } }
+  const c = e.target.closest("[data-cancel]");
+  if (c) {
+    c.disabled = true;
+    c.textContent = "Cancelando…";
+    try {
+      const r = await api(`/api/jobs/${c.dataset.cancel}/cancel`, { method: "POST" });
+      toast(r.state === "cancelled" ? "⛔ Cancelada" : "⛔ Cancelando…");
+      setTimeout(loadJobs, 800);
+    } catch (err) { fail(err); loadJobs(); }
+  }
   const d = e.target.closest("[data-deljob]");
   if (d) {
     try { await api(`/api/jobs/${d.dataset.deljob}`, { method: "DELETE" }); d.closest(".job").remove(); } catch (err) { fail(err); }

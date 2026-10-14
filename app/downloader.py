@@ -10,7 +10,7 @@ import shutil
 import sqlite3
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -23,7 +23,7 @@ log = logging.getLogger("criba.dl")
 # Al empezar a seguir: cuántos archivos ya existentes se marcan como "vistos" sin descargarlos.
 # Basta con cubrir de sobra los SKIP_ABORT primeros (y las fijadas): cada comprobación se detiene
 # en cuanto encuentra SKIP_ABORT ya vistos seguidos, así que nunca llega más abajo.
-BASELINE_SCAN = 50
+BASELINE_SCAN = 15  # > SKIP_ABORT + las 3 publicaciones fijadas que permite Instagram
 # Archivos ya vistos seguidos tras los que se deja de recorrer el perfil
 SKIP_ABORT = 6
 
@@ -80,13 +80,49 @@ def _env() -> dict:
 # Trabajo en curso: lo fija el worker para que _run vaya guardando el registro en directo
 current_job: contextvars.ContextVar[int | None] = contextvars.ContextVar("current_job", default=None)
 LIVE_EVERY = 3  # segundos entre volcados del registro en directo
+# Tiempo máximo de cada paso de una comprobación (salvo «todo el histórico»)
+STEP_TIMEOUT = 30 * 60
+LINK_TIMEOUT = 2 * 3600  # un enlace puede ser un vídeo largo
+
+# Procesos en marcha por trabajo y trabajos que se han pedido cancelar
+_procs: dict[int, asyncio.subprocess.Process] = {}
+_cancelled: set[int] = set()
 
 
-async def _run(args: list[str], timeout: int = 3600) -> tuple[int, str]:
+class JobCancelled(Exception):
+    pass
+
+
+def cancel_job(job_id: int) -> bool:
+    """Marca el trabajo como cancelado y mata lo que esté ejecutando. Devuelve si había proceso."""
+    _cancelled.add(job_id)
+    proc = _procs.get(job_id)
+    if proc and proc.returncode is None:
+        proc.kill()
+        return True
+    return False
+
+
+def forget_cancel(job_id: int):
+    _cancelled.discard(job_id)
+
+
+async def _run(args: list[str], timeout: int = STEP_TIMEOUT) -> tuple[int, str]:
+    job_id = current_job.get()
+    if job_id in _cancelled:
+        raise JobCancelled
     log.info("Ejecutando: %s", " ".join(args[2:]))
     proc = await asyncio.create_subprocess_exec(
         *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT, env=_env())
-    job_id = current_job.get()
+    if job_id:
+        _procs[job_id] = proc
+    try:
+        return await _collect(proc, job_id, timeout)
+    finally:
+        _procs.pop(job_id, None)
+
+
+async def _collect(proc, job_id: int | None, timeout: int) -> tuple[int, str]:
     row = db.one("SELECT log FROM jobs WHERE id=?", (job_id,)) if job_id else None
     prefix = (row or {}).get("log") or ""
     lines: list[str] = []
@@ -106,8 +142,10 @@ async def _run(args: list[str], timeout: int = 3600) -> tuple[int, str]:
         await asyncio.wait_for(read(), max(1, deadline - loop.time()))
     except asyncio.TimeoutError:
         proc.kill()
-        lines.append("Tiempo de espera agotado")
+        lines.append(f"Tiempo de espera agotado ({timeout // 60} min)")
         return -1, "\n".join(lines)
+    if job_id in _cancelled:
+        raise JobCancelled
     out = "\n".join(lines)
     if job_id:  # lo siguiente que se ejecute en este trabajo se añade detrás
         db.x("UPDATE jobs SET log=? WHERE id=?", (tail(prefix + out + "\n"), job_id))
@@ -138,15 +176,15 @@ def _media_files(folder: Path) -> list[Path]:
 
 async def download_link(url: str, dest: Path) -> tuple[int, str]:
     """gallery-dl primero (redes sociales, galerías, enlaces directos), luego yt-dlp, luego extractor genérico."""
-    code, out = await _run(_gdl_args(url, dest) + [url])
+    code, out = await _run(_gdl_args(url, dest) + [url], LINK_TIMEOUT)
     logs = [f"$ gallery-dl\n{out}"]
     if _media_files(dest):
         return code, "\n".join(logs)
-    code, out = await _run(_ytdlp_args(url, dest))
+    code, out = await _run(_ytdlp_args(url, dest), LINK_TIMEOUT)
     logs.append(f"$ yt-dlp\n{out}")
     if _media_files(dest):
         return code, "\n".join(logs)
-    code, out = await _run(_gdl_args(url, dest) + ["-o", "extractor.generic.enabled=true", url])
+    code, out = await _run(_gdl_args(url, dest) + ["-o", "extractor.generic.enabled=true", url], LINK_TIMEOUT)
     logs.append(f"$ gallery-dl (genérico)\n{out}")
     return code, "\n".join(logs)
 
@@ -195,38 +233,70 @@ async def download_subscription(sub: dict, dest: Path) -> tuple[int, str, str, s
         return 1, "No hay nada que mirar sin cookies", "; ".join(notes), sub.get("parts_done")
     include = ["-o", f"include={','.join(parts)}"] if parts else []
 
-    async def mark_seen(which: list[str] | None, upto: int = BASELINE_SCAN) -> tuple[int, str]:
-        before = _archive_count(archive)
+    async def mark_seen(which: list[str] | None, upto: int = BASELINE_SCAN, since: str | None = None) -> int:
+        """Marca como visto lo ya publicado sin descargarlo. Con since, antes descarga lo publicado
+        desde esa fecha (p. ej. desde que se sigue el perfil). Las historias nunca se marcan: duran
+        24 h, así que siempre son recientes y se descargan."""
+        if which:
+            which = [p for p in which if p != "stories"]
+            if not which:
+                return 0
         inc = ["-o", f"include={','.join(which)}"] if which else []
-        code, out = await _run(args + inc + ["--no-download", "--range", f"1-{upto}", sub["url"]])
         what = f" de {_labels(which)}" if which else ""
-        notes.append(f"Marcados {_archive_count(archive) - before} archivos existentes{what} como vistos")
+        code = 0
+        if since:
+            c, out = await _run(args + inc + ["--filter", f"date >= {_gdl_datetime(since)}", "--range", f"1-{upto}",
+                                              sub["url"]])
+            logs.append(f"$ descargar{what} lo publicado desde que lo sigues\n{out}")
+            code = c
+        before = _archive_count(archive)
+        c, out = await _run(args + inc + ["--no-download", "--range", f"1-{upto}", sub["url"]])
+        notes.append(f"Marcados {_archive_count(archive) - before} archivos anteriores{what} como vistos")
         logs.append(f"$ marcar como visto{what}\n{out}")
-        return code, out
+        return code or c
+
+    async def stories_now() -> int:
+        """Al activar las historias, bajar ya las que haya (si no, pueden caducar antes de la siguiente)."""
+        if "stories" not in parts:
+            return 0
+        c, out = await _run(args + ["-o", "include=stories", sub["url"]])
+        logs.append(f"$ historias actuales\n{out}")
+        return c
 
     if not sub["baseline_done"]:
         n = sub["initial_count"]
         if n == 0:  # solo lo nuevo: marcar lo existente como visto sin descargarlo
-            code, _ = await mark_seen(parts or None)
+            code = await mark_seen(parts or None)
+            code = await stories_now() or code
         elif n < 0:  # todo el histórico
             code, out = await _run(args + include + [sub["url"]], timeout=12 * 3600)
             logs.append(out)
         else:  # últimos N: se descargan y el resto se marca como visto para no bajarlo en la siguiente pasada
             code, out = await _run(args + include + ["--range", f"1-{n}", sub["url"]], timeout=6 * 3600)
             logs.append(out)
-            code = (await mark_seen(parts or None, n + BASELINE_SCAN))[0] or code
+            code = await mark_seen(parts or None, n + BASELINE_SCAN) or code
         return code, "\n".join(logs), "; ".join(notes), ",".join(parts) or None
 
-    # secciones añadidas después (p. ej. reels o historias): lo que ya existía se marca como visto
+    # secciones activadas después (p. ej. reels o historias): se descarga lo publicado desde que se
+    # sigue el perfil y lo anterior se marca como visto
     done = [p for p in (sub.get("parts_done") or "").split(",") if p]
+    if not archive.exists():  # «Recuperar desde que lo sigo» (o archivo perdido): empezar de nuevo
+        done = []
+        if not parts and await mark_seen(None, since=sub["created_at"]):
+            return 1, "\n".join(logs), "; ".join(notes), None
     new_parts = [p for p in parts if p not in done]
     if parts and new_parts:
-        c, _ = await mark_seen(new_parts)
-        if c == 0:
+        if await mark_seen(new_parts, since=sub["created_at"]) == 0:
             done += new_parts
     code, out = await _run(args + include + ["-o", f"skip=abort:{SKIP_ABORT}", sub["url"]])
     logs.append(out)
     return code, "\n".join(logs), "; ".join(notes), ",".join(done) or None
+
+
+def _gdl_datetime(iso: str) -> str:
+    """Fecha ISO (UTC) → expresión de filtro de gallery-dl, que compara en UTC."""
+    d = datetime.fromisoformat(iso).astimezone(timezone.utc)
+    return f"datetime({d.year}, {d.month}, {d.day}, {d.hour}, {d.minute}, {d.second})"
 
 
 # ---------------------------------------------------------------- metadatos
