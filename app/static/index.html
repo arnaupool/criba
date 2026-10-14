@@ -87,7 +87,8 @@
   <section id="view-descargas" class="view hidden">
     <form class="card form inline" id="dl-form">
       <input name="url" placeholder="Pega uno o varios enlaces…" required>
-      <button class="btn primary" type="submit">Descargar</button>
+      <button class="btn" type="button" data-device>📱 A este dispositivo</button>
+      <button class="btn primary" type="submit">📥 A la cola</button>
     </form>
     <div class="row end jobs-tools">
       <span class="muted small">Se borran solas a los 30 días. Borrar una descarga no toca lo que ya está en la cola.</span>
@@ -171,8 +172,23 @@
   <form class="sheet small" id="add-form">
     <div class="sheet-head"><b>Descargar enlace</b><button type="button" class="btn icon-btn" data-close>✕</button></div>
     <textarea name="url" rows="3" placeholder="Pega uno o varios enlaces (Instagram, X, Reddit, TikTok, YouTube, webs…)" required></textarea>
-    <div class="sheet-foot"><span class="muted small">Irá a la cola de revisión</span><button class="btn primary">Descargar</button></div>
+    <div class="sheet-foot add-foot">
+      <button type="button" class="btn" data-device>📱 A este dispositivo</button>
+      <button class="btn primary">📥 A la cola</button>
+    </div>
   </form>
+</div>
+
+<!-- descargas a este dispositivo -->
+<div class="sheet-bg hidden" id="devdlg">
+  <div class="sheet" role="dialog" aria-label="Descargas a este dispositivo">
+    <div class="sheet-head"><b>📱 A este dispositivo</b><button type="button" class="btn icon-btn" id="dev-close" aria-label="Cerrar">✕</button></div>
+    <div class="dev-list" id="dev-list"></div>
+    <div class="sheet-foot">
+      <span class="muted small">No pasan por la cola. Se borran del servidor a la hora.</span>
+      <button class="btn primary hidden" id="dev-all">Guardar todo</button>
+    </div>
+  </div>
 </div>
 
 <div class="toast hidden" id="toast"><span id="toast-text"></span><button class="btn ghost small" id="toast-undo">Deshacer</button></div>

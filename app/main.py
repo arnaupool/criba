@@ -15,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from . import bot, config, library, tgreview, worker
 from .config import COOKIES, DATA, LIBRARY, UI_PASSWORD
 from .db import db, now
-from .downloader import COOKIE_FILE, tool_versions, update_tools
+from .downloader import COOKIE_FILE, device_dir, device_files, tool_versions, update_tools
 from .subscriptions import MIN_INTERVAL, add_subscription, parse_initial
 from .thumbs import make_thumb
 
@@ -28,6 +28,7 @@ STATIC = Path(__file__).parent / "static"
 async def lifespan(_app: FastAPI):
     worker.recover()
     tasks = [asyncio.create_task(worker.worker("link")), asyncio.create_task(worker.worker("sub")),
+             asyncio.create_task(worker.worker("device")),
              asyncio.create_task(worker.scheduler())]
     await bot.start()
     yield
@@ -285,6 +286,48 @@ async def download(url: str = Body(..., embed=True)):
     return {"jobs": [worker.enqueue_link(u, "web") for u in urls]}
 
 
+# ------------------------------------------------------------------ API: a este dispositivo
+
+@app.post("/api/device")
+async def device_download(url: str = Body(..., embed=True)):
+    urls = [u for u in url.split() if u.startswith(("http://", "https://"))]
+    if not urls:
+        raise HTTPException(400, "Pon un enlace que empiece por http(s)://")
+    return {"jobs": [worker.enqueue_device(u) for u in urls]}
+
+
+@app.get("/api/device/{jid}")
+async def device_status(jid: int):
+    j = db.one("SELECT * FROM jobs WHERE id=? AND kind='device'", (jid,))
+    if not j:
+        raise HTTPException(404, "No existe")
+    files = [{"i": i, "name": p.name, "size": p.stat().st_size, "kind": config.kind_of(p.name)}
+             for i, p in enumerate(device_files(jid))]
+    expired = j["status"] == "done" and not files
+    return {"id": jid, "url": j["url"], "status": j["status"], "files": files, "expired": expired,
+            "error": downloader_error(j) if j["status"] == "error" else None}
+
+
+def downloader_error(job: dict) -> str:
+    from .downloader import last_error_line
+    return last_error_line(job["log"] or "")
+
+
+@app.get("/api/device/{jid}/file/{i}")
+async def device_file(jid: int, i: int):
+    files = device_files(jid)
+    if i < 0 or i >= len(files):
+        raise HTTPException(404, "El archivo ya no está (se borran a la hora)")
+    return FileResponse(files[i], filename=files[i].name, headers={"Cache-Control": "no-store"})
+
+
+@app.delete("/api/device/{jid}")
+async def device_forget(jid: int):
+    import shutil
+    shutil.rmtree(device_dir(jid), ignore_errors=True)
+    return {"ok": True}
+
+
 @app.get("/api/jobs")
 async def jobs(limit: int = 50):
     rows = db.q("SELECT j.*, s.name sub_name FROM jobs j LEFT JOIN subscriptions s ON s.id=j.subscription_id "
@@ -313,6 +356,8 @@ async def retry(jid: int):
         raise HTTPException(404, "No existe")
     if j["kind"] == "sub":
         return {"job": worker.enqueue_sub(j["subscription_id"], "web")}
+    if j["kind"] == "device":
+        return {"job": worker.enqueue_device(j["url"])}
     return {"job": worker.enqueue_link(j["url"], "web")}
 
 

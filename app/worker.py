@@ -6,18 +6,25 @@ from datetime import datetime, timedelta, timezone
 
 from . import notify
 from .db import db, now
-from .downloader import (cleanup_tmp, download_link, download_subscription, ingest, job_tmp, last_error_line,
-                         site_of, tail)
+from .downloader import (cleanup_tmp, device_dir, download_link, download_subscription, ingest, job_tmp,
+                         last_error_line, prepare_device_files, purge_device, site_of, tail)
 from .library import purge_trash
 
 log = logging.getLogger("criba.worker")
-_wake = {"link": asyncio.Event(), "sub": asyncio.Event()}
+_wake = {"link": asyncio.Event(), "sub": asyncio.Event(), "device": asyncio.Event()}
 
 
 def enqueue_link(url: str, origin: str, chat_id: int | None = None, message_id: int | None = None) -> int:
     jid = db.x("INSERT INTO jobs(kind,url,origin,chat_id,message_id,created_at) VALUES('link',?,?,?,?,?)",
                (url, origin, chat_id, message_id, now()))
     _wake["link"].set()
+    return jid
+
+
+def enqueue_device(url: str) -> int:
+    """Descarga para el navegador que la pide: no pasa por la cola de revisión."""
+    jid = db.x("INSERT INTO jobs(kind,url,origin,created_at) VALUES('device',?,'web',?)", (url, now()))
+    _wake["device"].set()
     return jid
 
 
@@ -111,8 +118,21 @@ async def _process_sub(job: dict):
                           f"{last_error_line(out)}\n\nSi es Instagram o X, puede que haya que renovar las cookies.")
 
 
+async def _process_device(job: dict):
+    tmp = job_tmp(job["id"])
+    try:
+        code, out = await download_link(job["url"], tmp)
+        files = await asyncio.to_thread(prepare_device_files, tmp, job["url"], device_dir(job["id"]))
+    finally:
+        cleanup_tmp(tmp)
+    n = len(files)
+    note = f"{n} archivo{'s' if n != 1 else ''} para el dispositivo" if n else None
+    db.x("UPDATE jobs SET status=?, finished_at=?, log=?, note=? WHERE id=?",
+         ("done" if n else "error", now(), tail(out), note, job["id"]))
+
+
 async def worker(kind: str):
-    handler = _process_link if kind == "link" else _process_sub
+    handler = {"link": _process_link, "sub": _process_sub, "device": _process_device}[kind]
     while True:
         job = _claim(kind)
         if not job:
@@ -138,6 +158,7 @@ async def scheduler():
             for sub in db.q("SELECT id FROM subscriptions WHERE enabled=1 AND (next_check IS NULL OR next_check<=?)",
                             (now(),)):
                 enqueue_sub(sub["id"])
+            await asyncio.to_thread(purge_device)
             if loop.time() - last_purge > 3600:
                 last_purge = loop.time()
                 n = await asyncio.to_thread(purge_trash)

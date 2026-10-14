@@ -14,6 +14,8 @@ INBOX = DATA / "inbox"
 TRASH = DATA / "papelera"
 THUMBS = DATA / "thumbs"
 TMP = DATA / "tmp"
+# Descargas «a este dispositivo»: se sirven al navegador y se borran pasado DEVICE_HOURS
+DEVICE = DATA / "dispositivo"
 ARCHIVES = DATA / "archives"
 COOKIES = DATA / "cookies"
 DB_PATH = DATA / "criba.sqlite"
@@ -27,11 +29,12 @@ PUBLIC_URL = _env("CRIBA_URL").rstrip("/")
 UI_PASSWORD = _env("UI_PASSWORD")
 NOTIFY_NEW = _env("NOTIFY_NEW", "1") not in ("0", "false", "no")
 TRASH_DAYS = int(_env("TRASH_DAYS", "7") or 7)
+DEVICE_HOURS = 1
 DEFAULT_INTERVAL = int(_env("DEFAULT_INTERVAL_MIN", "120") or 120)
 # Directorio donde el arranque instala versiones nuevas de gallery-dl / yt-dlp
 PYUPD = DATA / "pyupd"
 
-for d in (DATA, INBOX, TRASH, THUMBS, TMP, ARCHIVES, COOKIES):
+for d in (DATA, INBOX, TRASH, THUMBS, TMP, ARCHIVES, COOKIES, DEVICE):
     d.mkdir(parents=True, exist_ok=True)
 
 IMAGE_EXT = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".heic", ".avif", ".jfif"}

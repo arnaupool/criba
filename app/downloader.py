@@ -8,11 +8,12 @@ import re
 import shutil
 import sqlite3
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
-from .config import ARCHIVES, COOKIES, INBOX, PYUPD, TMP, kind_of
+from .config import ARCHIVES, COOKIES, DEVICE, DEVICE_HOURS, INBOX, PYUPD, TMP, kind_of
 from .db import db, now
 from .library import clean_name, unique_path
 
@@ -258,6 +259,39 @@ def ingest(folder: Path, source: str, source_url: str | None, job_id: int | None
         db.x("UPDATE items SET file=? WHERE id=?", (dst.name, iid))
         new_ids.append(iid)
     return new_ids, dups
+
+
+def device_dir(job_id: int) -> Path:
+    return DEVICE / f"job_{job_id}"
+
+
+def prepare_device_files(folder: Path, source_url: str, dest: Path) -> list[Path]:
+    """Deja en dest los archivos descargados con nombre fecha_autor_id.ext, listos para el navegador."""
+    shutil.rmtree(dest, ignore_errors=True)
+    dest.mkdir(parents=True)
+    site = site_of(source_url)
+    out = []
+    for media in _media_files(folder):
+        m = _meta(_sidecar(media), site)
+        name = _save_name(m, media, hashlib.sha1(media.name.encode()).hexdigest())
+        dst = unique_path(dest, name)
+        shutil.move(str(media), str(dst))
+        out.append(dst)
+    if not out:
+        dest.rmdir()
+    return out
+
+
+def device_files(job_id: int) -> list[Path]:
+    d = device_dir(job_id)
+    return sorted(p for p in d.iterdir() if p.is_file()) if d.is_dir() else []
+
+
+def purge_device():
+    limit = time.time() - DEVICE_HOURS * 3600
+    for d in DEVICE.iterdir():
+        if d.is_dir() and d.stat().st_mtime < limit:
+            shutil.rmtree(d, ignore_errors=True)
 
 
 def job_tmp(job_id: int) -> Path:

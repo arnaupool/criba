@@ -153,6 +153,15 @@ main { padding: 16px; max-width: 1600px; margin: 0 auto; padding-bottom: 120px; 
 .picker-list .f .path { color: var(--muted); }
 .picker-list .f.on .path { color: inherit; opacity: .7; }
 .picker-new .row { margin-top: 4px; }
+.add-foot { justify-content: flex-end; }
+.dev-list { display: flex; flex-direction: column; gap: 10px; overflow-y: auto; min-height: 80px; }
+.dev-job { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+.dev-job .url { font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+.dev-job .st { font-weight: 600; margin-bottom: 2px; }
+.dev-job .err { color: var(--bad); font-size: 13px; overflow-wrap: anywhere; }
+.dev-file { display: flex; align-items: center; gap: 10px; padding: 8px 0 0; }
+.dev-file .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
+.dev-file .sz { color: var(--muted); font-size: 12px; }
 
 /* ---------- listas (seguimientos / descargas / ajustes) ---------- */
 .list { display: flex; flex-direction: column; gap: 10px; }

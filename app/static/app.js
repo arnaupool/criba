@@ -385,8 +385,8 @@ $("#v-restore").onclick = () => { const it = S.items[S.idx]; if (it) restoreIds(
 
 document.addEventListener("keydown", e => {
   if (e.target.matches("input, textarea, select")) return;
-  if (!$("#picker").classList.contains("hidden") || !$("#adddlg").classList.contains("hidden")) {
-    if (e.key === "Escape") { $("#picker-close").click(); $("#adddlg").classList.add("hidden"); }
+  if (["#picker", "#adddlg", "#devdlg"].some(s => !$(s).classList.contains("hidden"))) {
+    if (e.key === "Escape") { $("#picker-close").click(); $("#adddlg").classList.add("hidden"); $("#devdlg").classList.add("hidden"); }
     return;
   }
   if (!V.el.classList.contains("hidden")) {
@@ -556,6 +556,110 @@ $("#dl-form").onsubmit = async e => {
   try { await submitUrls(e.target.url.value); e.target.reset(); } catch (err) { fail(err); }
 };
 
+// ------------------------------------------------------------ A ESTE DISPOSITIVO
+// En el móvil se guarda con el menú de compartir (iOS: «Guardar imagen/vídeo» → Fotos);
+// en el PC se descarga directamente.
+const DEV = { jobs: [], timer: null };
+const shareMode = () => {
+  try {
+    return matchMedia("(pointer: coarse)").matches && !!navigator.canShare &&
+      navigator.canShare({ files: [new File(["x"], "x.jpg", { type: "image/jpeg" })] });
+  } catch (e) { return false; }
+};
+const devUrl = (j, f) => `/api/device/${j.id}/file/${f.i}`;
+
+$$("[data-device]").forEach(b => b.onclick = async () => {
+  const form = b.closest("form");
+  const text = form.url.value.trim();
+  if (!text) { form.url.focus(); return; }
+  try {
+    const r = await api("/api/device", { method: "POST", json: { url: text } });
+    r.jobs.forEach(id => DEV.jobs.unshift({ id, url: "", status: "queued", files: [], ready: {}, downloaded: false }));
+    form.reset();
+    $("#adddlg").classList.add("hidden");
+    $("#devdlg").classList.remove("hidden");
+    renderDev();
+    pollDev();
+  } catch (err) { fail(err); }
+});
+$("#dev-close").onclick = () => $("#devdlg").classList.add("hidden");
+$("#devdlg").addEventListener("click", e => { if (e.target.id === "devdlg") $("#devdlg").classList.add("hidden"); });
+
+async function pollDev() {
+  clearTimeout(DEV.timer);
+  for (const j of DEV.jobs.filter(j => j.status === "queued" || j.status === "running")) {
+    try {
+      Object.assign(j, await api(`/api/device/${j.id}`));
+      if (j.status === "done") onDevReady(j);
+    } catch (e) { if (e.message !== "401") { j.status = "error"; j.error = e.message; } }
+  }
+  renderDev();
+  if (DEV.jobs.some(j => j.status === "queued" || j.status === "running")) DEV.timer = setTimeout(pollDev, 1500);
+}
+
+async function onDevReady(j) {
+  if (!shareMode()) {
+    // PC: se descargan solos, uno detrás de otro para que el navegador no los bloquee
+    if (j.downloaded) return;
+    j.downloaded = true;
+    for (const f of j.files) { downloadFile(j, f); await new Promise(r => setTimeout(r, 500)); }
+    return;
+  }
+  // móvil: se preparan antes de que pulses «Guardar» (iOS exige que compartir siga al toque)
+  for (const f of j.files) {
+    try {
+      const blob = await (await fetch(devUrl(j, f))).blob();
+      j.ready[f.i] = new File([blob], f.name, { type: blob.type || "application/octet-stream" });
+    } catch (e) { j.ready[f.i] = null; }
+    renderDev();
+  }
+}
+
+function downloadFile(j, f) {
+  const a = document.createElement("a");
+  a.href = devUrl(j, f);
+  a.download = f.name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
+async function shareFiles(files) {
+  try { await navigator.share({ files }); }
+  catch (e) { if (e.name !== "AbortError") toast("❌ No se pudo abrir el menú de compartir: " + e.message); }
+}
+
+function renderDev() {
+  const share = shareMode();
+  $("#dev-list").innerHTML = DEV.jobs.length ? DEV.jobs.map(j => {
+    let body = "";
+    if (j.status === "queued" || j.status === "running") body = `<div class="st">⏳ Descargando en el servidor…</div>`;
+    else if (j.status === "error") body = `<div class="st">❌ No se ha podido descargar</div><div class="err">${esc(j.error || "")}</div>`;
+    else if (j.expired) body = `<div class="st">⌛ Ya no está en el servidor (se borran a la hora)</div>`;
+    else body = `<div class="st">✅ ${j.files.length} archivo${j.files.length !== 1 ? "s" : ""}</div>` + j.files.map(f => {
+      const ico = f.kind === "video" ? "🎬" : "🖼";
+      let btn;
+      if (!share) btn = `<a class="btn small" href="${devUrl(j, f)}" download="${esc(f.name)}">Descargar</a>`;
+      else if (j.ready[f.i] === undefined) btn = `<button class="btn small" disabled>Preparando…</button>`;
+      else if (j.ready[f.i] === null) btn = `<a class="btn small" href="${devUrl(j, f)}" download="${esc(f.name)}">Abrir</a>`;
+      else btn = `<button class="btn small primary" data-share="${j.id}:${f.i}">Guardar</button>`;
+      return `<div class="dev-file"><span>${ico}</span><span class="nm">${esc(f.name)}</span><span class="sz">${fmtSize(f.size)}</span>${btn}</div>`;
+    }).join("");
+    return `<div class="dev-job">${body}<div class="url">${esc(j.url)}</div></div>`;
+  }).join("") : `<p class="muted">Nada por ahora.</p>`;
+  const ready = share ? DEV.jobs.flatMap(j => Object.values(j.ready).filter(Boolean)) : [];
+  $("#dev-all").classList.toggle("hidden", ready.length < 2);
+  $("#dev-all").textContent = `Guardar todo (${ready.length})`;
+  $("#dev-all").onclick = () => shareFiles(ready);
+}
+$("#dev-list").addEventListener("click", e => {
+  const b = e.target.closest("[data-share]");
+  if (!b) return;
+  const [jid, i] = b.dataset.share.split(":").map(Number);
+  const f = DEV.jobs.find(j => j.id === jid)?.ready[i];
+  if (f) shareFiles([f]);
+});
+
 // ------------------------------------------------------------ SEGUIMIENTOS
 let newSubFolder = null;
 $("#sub-folder-btn").onclick = async () => {
@@ -662,7 +766,8 @@ async function loadJobs() {
   try { d = await api("/api/jobs?limit=80"); } catch (e) { return fail(e); }
   const open = new Set($$("#jobs pre").map(p => p.dataset.id));
   $("#jobs").innerHTML = d.jobs.length ? `<div class="list">${d.jobs.map(j => {
-    const what = j.kind === "sub" ? `👀 ${esc(j.sub_name || "seguimiento borrado")}` : `<a href="${esc(j.url)}" target="_blank" rel="noopener">${esc(j.url)}</a>`;
+    const what = j.kind === "sub" ? `👀 ${esc(j.sub_name || "seguimiento borrado")}`
+      : `${j.kind === "device" ? "📱 " : ""}<a href="${esc(j.url)}" target="_blank" rel="noopener">${esc(j.url)}</a>`;
     let res = "";
     if (j.status === "done") res = j.note && !j.new_items ? esc(j.note)
       : `${j.new_items} nuevo${j.new_items !== 1 ? "s" : ""}${j.dup_items ? ` · ${j.dup_items} repetidos` : ""}`;
