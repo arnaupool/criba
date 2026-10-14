@@ -664,7 +664,8 @@ async function loadJobs() {
   $("#jobs").innerHTML = d.jobs.length ? `<div class="list">${d.jobs.map(j => {
     const what = j.kind === "sub" ? `👀 ${esc(j.sub_name || "seguimiento borrado")}` : `<a href="${esc(j.url)}" target="_blank" rel="noopener">${esc(j.url)}</a>`;
     let res = "";
-    if (j.status === "done") res = `${j.new_items} nuevo${j.new_items !== 1 ? "s" : ""}${j.dup_items ? ` · ${j.dup_items} repetidos` : ""}`;
+    if (j.status === "done") res = j.note && !j.new_items ? esc(j.note)
+      : `${j.new_items} nuevo${j.new_items !== 1 ? "s" : ""}${j.dup_items ? ` · ${j.dup_items} repetidos` : ""}`;
     if (j.status === "running") res = "descargando…";
     if (j.status === "queued") res = "en espera";
     if (j.status === "error") res = "falló";

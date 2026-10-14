@@ -86,16 +86,18 @@ async def _process_sub(job: dict):
     finally:
         cleanup_tmp(tmp)
     failed = code not in (0,) and not ids
-    if note:
-        out = f"{note}\n\n{out}"
+    if failed:
+        note = ""
     nxt = datetime.now(timezone.utc) + timedelta(minutes=sub["interval_min"] * random.uniform(0.9, 1.1))
     db.x("""UPDATE subscriptions SET last_check=?, next_check=?, last_new=?, total=total+?,
             baseline_done = CASE WHEN ? THEN baseline_done ELSE 1 END,
             last_error=?, errors_in_row = CASE WHEN ? THEN errors_in_row+1 ELSE 0 END WHERE id=?""",
          (now(), nxt.isoformat(timespec="seconds"), len(ids), len(ids), failed,
           last_error_line(out) if failed else None, failed, sub["id"]))
-    db.x("UPDATE jobs SET status=?, finished_at=?, new_items=?, dup_items=?, log=? WHERE id=?",
-         ("error" if failed else "done", now(), len(ids), dups, tail(out), job["id"]))
+    # la nota va delante del registro ya recortado para que no se pierda
+    log_text = f"{note}\n\n{tail(out)}" if note else tail(out)
+    db.x("UPDATE jobs SET status=?, finished_at=?, new_items=?, dup_items=?, log=?, note=? WHERE id=?",
+         ("error" if failed else "done", now(), len(ids), dups, log_text, note or None, job["id"]))
     if ids and notify.bot:
         from .bot import notify_new_items  # import tardío para evitar ciclos
         await notify_new_items(sub, ids)

@@ -63,7 +63,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     finished_at TEXT,
     new_items INTEGER NOT NULL DEFAULT 0,
     dup_items INTEGER NOT NULL DEFAULT 0,
-    log TEXT
+    log TEXT,
+    note TEXT                      -- resumen legible (p. ej. «Marcados N archivos existentes como vistos»)
 );
 CREATE INDEX IF NOT EXISTS jobs_status ON jobs(status, kind);
 
@@ -86,6 +87,13 @@ class DB:
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA foreign_keys=ON")
         self.conn.executescript(SCHEMA)
+        self._migrate()
+
+    def _migrate(self):
+        """Columnas añadidas después de la primera versión."""
+        cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(jobs)")}
+        if "note" not in cols:
+            self.conn.execute("ALTER TABLE jobs ADD COLUMN note TEXT")
 
     def q(self, sql: str, args=()) -> list[dict]:
         with self._lock:
