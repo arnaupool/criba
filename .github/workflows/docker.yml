@@ -40,6 +40,11 @@ jobs:
           context: .
           platforms: linux/amd64
           push: true
+          # Manifiesto Docker v2 simple, sin attestations: el aviso de actualización de Unraid
+          # no entiende los índices OCI y marcaría el contenedor como «not available»
+          provenance: false
+          sbom: false
+          outputs: type=image,oci-mediatypes=false
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
