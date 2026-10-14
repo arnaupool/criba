@@ -245,8 +245,7 @@ async def download_subscription(sub: dict, dest: Path) -> tuple[int, str, str, s
         what = f" de {_labels(which)}" if which else ""
         code = 0
         if since:
-            c, out = await _run(args + inc + ["--filter", f"date >= {_gdl_datetime(since)}", "--range", f"1-{upto}",
-                                              sub["url"]])
+            c, out = await _run(args + inc + ["--filter", _since_filter(since), "--range", f"1-{upto}", sub["url"]])
             logs.append(f"$ descargar{what} lo publicado desde que lo sigues\n{out}")
             code = c
         before = _archive_count(archive)
@@ -288,15 +287,25 @@ async def download_subscription(sub: dict, dest: Path) -> tuple[int, str, str, s
     if parts and new_parts:
         if await mark_seen(new_parts, since=sub["created_at"]) == 0:
             done += new_parts
+    # Sin --filter de fecha aquí: lo filtrado no cuenta para skip=abort y recorrería el perfil entero.
+    # Lo anterior a seguir el perfil (p. ej. una publicación antigua recién fijada) se descarta al ingerir.
     code, out = await _run(args + include + ["-o", f"skip=abort:{SKIP_ABORT}", sub["url"]])
     logs.append(out)
     return code, "\n".join(logs), "; ".join(notes), ",".join(done) or None
 
 
-def _gdl_datetime(iso: str) -> str:
-    """Fecha ISO (UTC) → expresión de filtro de gallery-dl, que compara en UTC."""
+def _utc(iso: str) -> datetime:
+    """Fecha ISO, con o sin zona (las de gallery-dl vienen sin zona y son UTC), en UTC."""
+    d = datetime.fromisoformat(iso)
+    return d.replace(tzinfo=timezone.utc) if d.tzinfo is None else d.astimezone(timezone.utc)
+
+
+def _since_filter(iso: str) -> str:
+    """Filtro de gallery-dl: publicado desde esa fecha ISO (gallery-dl compara en UTC).
+    Lo que no trae fecha pasa, para no perder nada en sitios que no la dan."""
     d = datetime.fromisoformat(iso).astimezone(timezone.utc)
-    return f"datetime({d.year}, {d.month}, {d.day}, {d.hour}, {d.minute}, {d.second})"
+    when = f"datetime({d.year}, {d.month}, {d.day}, {d.hour}, {d.minute}, {d.second})"
+    return f'"date" not in locals() or not date or date >= {when}'
 
 
 # ---------------------------------------------------------------- metadatos
@@ -380,10 +389,13 @@ def _sha256(p: Path) -> str:
 
 
 def ingest(folder: Path, source: str, source_url: str | None, job_id: int | None = None,
-           sub: dict | None = None, defaults: dict | None = None) -> tuple[list[int], int]:
-    """Mueve los archivos descargados a la bandeja y los registra. Devuelve (ids nuevos, duplicados)."""
+           sub: dict | None = None, defaults: dict | None = None, min_date: str | None = None,
+           stats: dict | None = None) -> tuple[list[int], int]:
+    """Mueve los archivos descargados a la bandeja y los registra. Devuelve (ids nuevos, duplicados).
+    Con min_date se descarta lo publicado antes (y se cuenta en stats["old"])."""
     new_ids, dups = [], 0
     site = site_of(source_url) if source_url else "telegram"
+    limit = _utc(min_date) if min_date else None
     for media in _media_files(folder):
         sha = _sha256(media)
         if db.one("SELECT id FROM items WHERE sha256=?", (sha,)):
@@ -391,6 +403,11 @@ def ingest(folder: Path, source: str, source_url: str | None, job_id: int | None
             dups += 1
             continue
         m = _meta(_sidecar(media), site)
+        if limit and m["date"] and _utc(m["date"]) < limit:
+            media.unlink(missing_ok=True)
+            if stats is not None:
+                stats["old"] = stats.get("old", 0) + 1
+            continue
         for k, v in (defaults or {}).items():
             m[k] = m.get(k) or v
         iid = db.x(

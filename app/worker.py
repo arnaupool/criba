@@ -94,10 +94,18 @@ async def _process_sub(job: dict):
     tmp = job_tmp(job["id"])
     try:
         code, out, note, parts_done = await download_subscription(sub, tmp)
+        # en las comprobaciones normales, lo publicado antes de seguir el perfil no es nuevo
+        # (p. ej. una publicación antigua que acaban de fijar arriba); en el alta sí se quiere
+        stats: dict = {}
         ids, dups = await asyncio.to_thread(ingest, tmp, "sub", sub["url"], job["id"], sub,
-                                            {"author": sub["name"]})
+                                            {"author": sub["name"]},
+                                            sub["created_at"] if sub["baseline_done"] else None, stats)
     finally:
         cleanup_tmp(tmp)
+    if stats.get("old"):
+        n = stats["old"]
+        note = "; ".join(x for x in (note, f"{n} anterior{'es' if n != 1 else ''} a seguir el perfil "
+                                          f"descartad{'os' if n != 1 else 'o'} (p. ej. fijadas)") if x)
     failed = code not in (0,) and not ids
     if failed:  # «Marcados 0…» confundiría; los demás avisos (p. ej. falta de cookies) sí se dejan
         note = "; ".join(n for n in note.split("; ") if n and not n.startswith("Marcados"))
