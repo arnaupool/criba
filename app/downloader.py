@@ -131,26 +131,74 @@ def _archive_count(path: Path) -> int:
         return 0
 
 
-async def download_subscription(sub: dict, dest: Path) -> tuple[int, str, str]:
-    """Devuelve (código, log, nota). Usa un archivo de descargas por seguimiento para bajar solo lo nuevo."""
+# Secciones de un perfil de Instagram (opción «include» de gallery-dl)
+IG_PARTS = {"posts": "Publicaciones", "reels": "Reels", "stories": "Historias", "highlights": "Destacadas",
+            "tagged": "Etiquetadas"}
+IG_DEFAULT = ["posts", "reels", "stories"]
+# Sin sesión iniciada Instagram solo enseña las publicaciones (comprobado con gallery-dl 1.32.16:
+# reels da KeyError, etiquetadas redirige al login, historias y destacadas no devuelven nada)
+IG_LOGIN_PARTS = {"reels", "stories", "highlights", "tagged"}
+
+
+def sub_parts(sub: dict) -> list[str]:
+    """Secciones que se miran de un seguimiento (solo Instagram; vacío en el resto de sitios)."""
+    if sub["site"] != "instagram":
+        return []
+    parts = [p for p in (sub.get("parts") or "").split(",") if p in IG_PARTS]
+    return parts or list(IG_DEFAULT)
+
+
+def _labels(parts) -> str:
+    return ", ".join(IG_PARTS[p] for p in IG_PARTS if p in parts)
+
+
+async def download_subscription(sub: dict, dest: Path) -> tuple[int, str, str, str | None]:
+    """Devuelve (código, log, nota, secciones ya marcadas). Un archivo de descargas por seguimiento
+    hace que solo se baje lo nuevo."""
     archive = ARCHIVES / f"sub_{sub['id']}.sqlite"
     args = _gdl_args(sub["url"], dest) + ["--download-archive", str(archive)]
-    note = ""
+    notes, logs = [], []
+    parts = sub_parts(sub)
+    if parts and not cookies_for(sub["url"]) and IG_LOGIN_PARTS & set(parts):
+        skipped = IG_LOGIN_PARTS & set(parts)
+        parts = [p for p in parts if p not in skipped]
+        notes.append(f"Sin cookies de Instagram: se saltan {_labels(skipped)}")
+    if sub_parts(sub) and not parts:
+        return 1, "No hay nada que mirar sin cookies", "; ".join(notes), sub.get("parts_done")
+    include = ["-o", f"include={','.join(parts)}"] if parts else []
+
+    async def mark_seen(which: list[str] | None) -> tuple[int, str]:
+        before = _archive_count(archive)
+        inc = ["-o", f"include={','.join(which)}"] if which else []
+        code, out = await _run(args + inc + ["--no-download", "--range", f"1-{BASELINE_SCAN}", sub["url"]])
+        what = f" de {_labels(which)}" if which else ""
+        notes.append(f"Marcados {_archive_count(archive) - before} archivos existentes{what} como vistos")
+        logs.append(f"$ marcar como visto{what}\n{out}")
+        return code, out
+
     if not sub["baseline_done"]:
         n = sub["initial_count"]
         if n == 0:  # solo lo nuevo: marcar lo existente como visto sin descargarlo
-            code, out = await _run(args + ["--no-download", "--range", f"1-{BASELINE_SCAN}", sub["url"]])
-            note = f"Marcados {_archive_count(archive)} archivos existentes como vistos"
-            return code, out, note
-        if n < 0:  # todo el histórico
-            code, out = await _run(args + [sub["url"]], timeout=12 * 3600)
-            return code, out, note
-        # últimos N: se descargan y el resto se marca como visto para no bajarlo en la siguiente pasada
-        code, out = await _run(args + ["--range", f"1-{n}", sub["url"]], timeout=6 * 3600)
-        code2, out2 = await _run(args + ["--no-download", "--range", f"1-{BASELINE_SCAN}", sub["url"]])
-        return code or code2, f"{out}\n$ marcar el resto como visto\n{out2}", note
-    code, out = await _run(args + ["-o", f"skip=abort:{SKIP_ABORT}", sub["url"]])
-    return code, out, note
+            code, _ = await mark_seen(parts or None)
+        elif n < 0:  # todo el histórico
+            code, out = await _run(args + include + [sub["url"]], timeout=12 * 3600)
+            logs.append(out)
+        else:  # últimos N: se descargan y el resto se marca como visto para no bajarlo en la siguiente pasada
+            code, out = await _run(args + include + ["--range", f"1-{n}", sub["url"]], timeout=6 * 3600)
+            logs.append(out)
+            code = (await mark_seen(parts or None))[0] or code
+        return code, "\n".join(logs), "; ".join(notes), ",".join(parts) or None
+
+    # secciones añadidas después (p. ej. reels o historias): lo que ya existía se marca como visto
+    done = [p for p in (sub.get("parts_done") or "").split(",") if p]
+    new_parts = [p for p in parts if p not in done]
+    if parts and new_parts:
+        c, _ = await mark_seen(new_parts)
+        if c == 0:
+            done += new_parts
+    code, out = await _run(args + include + ["-o", f"skip=abort:{SKIP_ABORT}", sub["url"]])
+    logs.append(out)
+    return code, "\n".join(logs), "; ".join(notes), ",".join(done) or None
 
 
 # ---------------------------------------------------------------- metadatos

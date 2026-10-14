@@ -15,8 +15,9 @@ from fastapi.staticfiles import StaticFiles
 from . import bot, config, library, tgreview, worker
 from .config import COOKIES, DATA, LIBRARY, UI_PASSWORD
 from .db import db, now
-from .downloader import COOKIE_FILE, device_dir, device_files, tool_versions, update_tools
-from .subscriptions import MIN_INTERVAL, add_subscription, parse_initial
+from .downloader import (COOKIE_FILE, IG_DEFAULT, IG_PARTS, device_dir, device_files, sub_parts, tool_versions,
+                         update_tools)
+from .subscriptions import MIN_INTERVAL, add_subscription, clean_parts, parse_initial
 from .thumbs import make_thumb
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -26,6 +27,7 @@ STATIC = Path(__file__).parent / "static"
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    log.info("Criba %s", config.VERSION)
     worker.recover()
     tasks = [asyncio.create_task(worker.worker("link")), asyncio.create_task(worker.worker("sub")),
              asyncio.create_task(worker.worker("device")),
@@ -365,15 +367,19 @@ async def retry(jid: int):
 
 @app.get("/api/subs")
 async def subs():
-    return {"subs": db.q("SELECT s.*, (SELECT COUNT(*) FROM items i WHERE i.subscription_id=s.id AND "
-                         "i.status='pending') pending FROM subscriptions s ORDER BY s.name COLLATE NOCASE")}
+    rows = db.q("SELECT s.*, (SELECT COUNT(*) FROM items i WHERE i.subscription_id=s.id AND "
+                "i.status='pending') pending FROM subscriptions s ORDER BY s.name COLLATE NOCASE")
+    for r in rows:
+        r["parts_effective"] = sub_parts(r)
+    return {"subs": rows, "ig_parts": IG_PARTS, "ig_default": IG_DEFAULT}
 
 
 @app.post("/api/subs")
 async def create_sub(url: str = Body(...), name: str | None = Body(None), interval_min: int | None = Body(None),
-                     initial: str = Body("nuevo"), folder: str | None = Body(None)):
+                     initial: str = Body("nuevo"), folder: str | None = Body(None),
+                     parts: list[str] | None = Body(None)):
     try:
-        return add_subscription(url, name, interval_min, parse_initial(initial), folder)
+        return add_subscription(url, name, interval_min, parse_initial(initial), folder, parts)
     except ValueError as e:
         raise HTTPException(400, str(e))
 
@@ -389,6 +395,10 @@ async def update_sub(sid: int, data: dict = Body(...)):
         fields["interval_min"] = max(MIN_INTERVAL, int(data["interval_min"]))
     if "enabled" in data:
         fields["enabled"] = 1 if data["enabled"] else 0
+    if "parts" in data:
+        fields["parts"] = clean_parts(data["parts"])
+        if not fields["parts"]:
+            raise HTTPException(400, "Elige al menos una sección")
     if "folder" in data:
         fields["folder"] = (data["folder"] or "").strip() or None
     if fields:
@@ -429,6 +439,7 @@ async def settings():
         "library": str(LIBRARY), "data": str(DATA), "trash_days": config.TRASH_DAYS,
         "public_url": config.PUBLIC_URL, "password": bool(UI_PASSWORD),
         "versions": db.get_setting("versions", ""),
+        "version": config.VERSION, "commit": config.COMMIT,
     }
 
 

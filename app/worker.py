@@ -91,19 +91,20 @@ async def _process_sub(job: dict):
         return
     tmp = job_tmp(job["id"])
     try:
-        code, out, note = await download_subscription(sub, tmp)
+        code, out, note, parts_done = await download_subscription(sub, tmp)
         ids, dups = await asyncio.to_thread(ingest, tmp, "sub", sub["url"], job["id"], sub,
                                             {"author": sub["name"]})
     finally:
         cleanup_tmp(tmp)
     failed = code not in (0,) and not ids
-    if failed:
-        note = ""
+    if failed:  # «Marcados 0…» confundiría; los demás avisos (p. ej. falta de cookies) sí se dejan
+        note = "; ".join(n for n in note.split("; ") if n and not n.startswith("Marcados"))
     nxt = datetime.now(timezone.utc) + timedelta(minutes=sub["interval_min"] * random.uniform(0.9, 1.1))
     db.x("""UPDATE subscriptions SET last_check=?, next_check=?, last_new=?, total=total+?,
             baseline_done = CASE WHEN ? THEN baseline_done ELSE 1 END,
+            parts_done = CASE WHEN ? AND baseline_done=0 THEN parts_done ELSE ? END,
             last_error=?, errors_in_row = CASE WHEN ? THEN errors_in_row+1 ELSE 0 END WHERE id=?""",
-         (now(), nxt.isoformat(timespec="seconds"), len(ids), len(ids), failed,
+         (now(), nxt.isoformat(timespec="seconds"), len(ids), len(ids), failed, failed, parts_done,
           last_error_line(out) if failed else None, failed, sub["id"]))
     # la nota va delante del registro ya recortado para que no se pierda
     log_text = f"{note}\n\n{tail(out)}" if note else tail(out)

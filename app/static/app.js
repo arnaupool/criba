@@ -108,6 +108,8 @@ async function loadItems(reset) {
 async function loadSubsData() {
   const d = await api("/api/subs");
   S.subs = d.subs;
+  S.igParts = d.ig_parts;
+  S.igDefault = d.ig_default;
 }
 
 function renderChips() {
@@ -676,18 +678,34 @@ $("#sub-form").onsubmit = async e => {
   e.preventDefault();
   const f = e.target;
   const mode = f.initial_mode.value;
+  const isIG = /instagram\.com/i.test(f.url.value);
+  const parts = isIG ? $$("#ig-new-checks input:checked").map(i => i.value) : null;
+  if (isIG && !parts.length) { toast("Elige al menos qué mirar en Instagram"); return; }
   const body = {
     url: f.url.value.trim(), name: f.name.value.trim() || null,
     interval_min: f.interval_min.value ? +f.interval_min.value : null,
-    initial: mode === "n" ? String(f.initial_n.value || 20) : mode, folder: newSubFolder,
+    initial: mode === "n" ? String(f.initial_n.value || 20) : mode, folder: newSubFolder, parts,
   };
   try {
     const s = await api("/api/subs", { method: "POST", json: body });
     toast(`👀 Siguiendo a ${s.name}`);
     f.reset(); newSubFolder = null; $("#sub-folder-btn span").textContent = "ninguna";
+    renderIgNew();
     loadSubs();
   } catch (err) { fail(err); }
 };
+
+// casillas de las secciones de Instagram
+function igChecks(selected, attr) {
+  return Object.entries(S.igParts || {}).map(([k, label]) =>
+    `<label class="check"><input type="checkbox" value="${k}" ${attr} ${selected.includes(k) ? "checked" : ""}> ${esc(label)}</label>`).join("");
+}
+function renderIgNew() {
+  const url = $("#sub-form").url.value;
+  $("#ig-new").classList.toggle("hidden", !/instagram\.com/i.test(url));
+  if (!$("#ig-new-checks").children.length && S.igParts) $("#ig-new-checks").innerHTML = igChecks(S.igDefault || [], "");
+}
+$("#sub-form").url.addEventListener("input", renderIgNew);
 
 async function loadSubs() {
   try { await loadSubsData(); } catch (e) { return fail(e); }
@@ -706,6 +724,7 @@ async function loadSubs() {
           ${s.enabled ? "" : '<span class="site">en pausa</span>'}</div>
         <div class="url"><a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.url)}</a></div>
         <div class="stat">${stat}</div>
+        ${s.site === "instagram" ? `<div class="checks ig-sub">${igChecks(s.parts_effective, `data-igsub="${s.id}"`)}</div>` : ""}
         <div class="stat">Cada ${fmtInterval(s.interval_min)} · próxima ${s.enabled ? ago(s.next_check) : "—"} · 📁 ${esc(s.folder || "sin carpeta sugerida")}</div>
       </div>
       <div></div>
@@ -752,6 +771,16 @@ $("#subs").addEventListener("click", async e => {
   } catch (err) { fail(err); }
 });
 $("#subs").addEventListener("change", async e => {
+  if (e.target.dataset.igsub) {
+    const id = +e.target.dataset.igsub;
+    const parts = $$(`[data-igsub="${id}"]:checked`).map(i => i.value);
+    if (!parts.length) { e.target.checked = true; toast("Tiene que quedar al menos una"); return; }
+    try {
+      await api(`/api/subs/${id}`, { method: "PATCH", json: { parts } });
+      toast(e.target.checked ? `✓ ${S.igParts[e.target.value]}: lo que ya exista se marcará como visto` : "Guardado");
+    } catch (err) { fail(err); loadSubs(); }
+    return;
+  }
   if (e.target.dataset.act !== "interval") return;
   const id = +e.target.closest(".sub").dataset.id;
   try { await api(`/api/subs/${id}`, { method: "PATCH", json: { interval_min: +e.target.value } }); loadSubs(); } catch (err) { fail(err); }
@@ -814,7 +843,11 @@ async function loadSettings() {
     : tg.ok ? `<span class="ok">Conectado</span> como <a href="https://t.me/${esc(tg.username)}" target="_blank">@${esc(tg.username)}</a>`
     : `<span class="bad">Error:</span> ${esc(tg.error || "no arrancó")}`;
   const bm = `javascript:(()=>{window.open(${JSON.stringify(location.origin + "/add?url=")}+encodeURIComponent(location.href),"_blank","width=420,height=320")})()`;
+  const ver = s.commit
+    ? `<a href="https://github.com/arnaupool/criba/commit/${esc(s.commit)}" target="_blank" rel="noopener">${esc(s.version)}</a>`
+    : esc(s.version);
   $("#settings").innerHTML = `<div class="settings">
+    <div class="card"><h2>Versión</h2><dl class="kv"><dt>Criba</dt><dd>${ver}</dd></dl></div>
     <div class="card"><h2>Telegram</h2><dl class="kv">
       <dt>Bot</dt><dd>${tgState}</dd>
       <dt>Usuarios autorizados</dt><dd>${tg.allowed.length ? tg.allowed.join(", ") : '<span class="bad">ninguno</span> — escribe /id al bot y pon tu ID en TELEGRAM_ALLOWED_IDS'}</dd>

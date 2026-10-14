@@ -30,6 +30,8 @@ UI_PASSWORD = _env("UI_PASSWORD")
 NOTIFY_NEW = _env("NOTIFY_NEW", "1") not in ("0", "false", "no")
 TRASH_DAYS = int(_env("TRASH_DAYS", "7") or 7)
 DEVICE_HOURS = 1
+VERSION = _env("CRIBA_VERSION", "dev")
+COMMIT = _env("CRIBA_COMMIT")
 DEFAULT_INTERVAL = int(_env("DEFAULT_INTERVAL_MIN", "120") or 120)
 # Directorio donde el arranque instala versiones nuevas de gallery-dl / yt-dlp
 PYUPD = DATA / "pyupd"

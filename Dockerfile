@@ -12,7 +12,12 @@ COPY app ./app
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-ENV CRIBA_LIBRARY=/library \
+# La GitHub Action pasa la fecha y el commit de la build (se muestran en Ajustes)
+ARG CRIBA_VERSION=dev
+ARG CRIBA_COMMIT=
+ENV CRIBA_VERSION=$CRIBA_VERSION \
+    CRIBA_COMMIT=$CRIBA_COMMIT \
+    CRIBA_LIBRARY=/library \
     CRIBA_DATA=/data \
     PYTHONUNBUFFERED=1 \
     PORT=8080

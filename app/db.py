@@ -110,6 +110,14 @@ class DB:
         cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(jobs)")}
         if "note" not in cols:
             self.conn.execute("ALTER TABLE jobs ADD COLUMN note TEXT")
+        cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(subscriptions)")}
+        if "parts" not in cols:
+            # parts: qué secciones del perfil se miran (Instagram); NULL = las de por defecto.
+            # parts_done: secciones cuyo contenido ya existente se ha marcado como visto.
+            self.conn.execute("ALTER TABLE subscriptions ADD COLUMN parts TEXT")
+            self.conn.execute("ALTER TABLE subscriptions ADD COLUMN parts_done TEXT")
+            # hasta ahora solo se miraban las publicaciones
+            self.conn.execute("UPDATE subscriptions SET parts_done='posts' WHERE site='instagram' AND baseline_done=1")
 
     def q(self, sql: str, args=()) -> list[dict]:
         with self._lock:

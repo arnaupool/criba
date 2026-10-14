@@ -4,7 +4,17 @@ from urllib.parse import urlparse
 
 from .config import DEFAULT_INTERVAL
 from .db import db, now
-from .downloader import site_of
+from .downloader import IG_PARTS, site_of
+
+
+def clean_parts(parts) -> str | None:
+    """Lista de secciones de Instagram válidas, en orden canónico, como texto separado por comas."""
+    if parts is None:
+        return None
+    if isinstance(parts, str):
+        parts = parts.split(",")
+    return ",".join(p for p in IG_PARTS if p in set(parts)) or None
+
 
 # Instagram y X vigilan más las consultas automáticas: intervalos más largos por defecto
 SITE_INTERVAL = {"instagram": 360, "twitter": 180, "tiktok": 240}
@@ -50,14 +60,15 @@ def normalize(url: str) -> tuple[str, str, str]:
 
 
 def add_subscription(url: str, name: str | None = None, interval: int | None = None, initial: int = 0,
-                     folder: str | None = None) -> dict:
+                     folder: str | None = None, parts=None) -> dict:
     url, site, auto_name = normalize(url)
     if db.one("SELECT id FROM subscriptions WHERE url=?", (url,)):
         raise ValueError("Ya sigues ese perfil")
     interval = max(MIN_INTERVAL, int(interval or SITE_INTERVAL.get(site, DEFAULT_INTERVAL)))
-    sid = db.x("""INSERT INTO subscriptions(url,name,site,interval_min,initial_count,folder,created_at)
-                  VALUES(?,?,?,?,?,?,?)""",
-               (url, (name or "").strip() or auto_name, site, interval, initial, folder or None, now()))
+    sid = db.x("""INSERT INTO subscriptions(url,name,site,interval_min,initial_count,folder,parts,created_at)
+                  VALUES(?,?,?,?,?,?,?,?)""",
+               (url, (name or "").strip() or auto_name, site, interval, initial, folder or None,
+                clean_parts(parts) if site == "instagram" else None, now()))
     from .worker import enqueue_sub
     enqueue_sub(sid, "alta")
     return db.one("SELECT * FROM subscriptions WHERE id=?", (sid,))
