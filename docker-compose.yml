@@ -1,0 +1,17 @@
+# Alternativa a la plantilla de Unraid (plugin Compose Manager o cualquier Docker).
+services:
+  criba:
+    image: ghcr.io/TU_USUARIO_GITHUB/criba:latest
+    container_name: criba
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - /mnt/user/appdata/criba:/data
+      - /mnt/user/Fotos:/library        # tu carpeta de fotos y vídeos
+    environment:
+      UI_PASSWORD: "cambia-esto"
+      TELEGRAM_TOKEN: ""                # de @BotFather
+      TELEGRAM_ALLOWED_IDS: ""          # tu ID (escribe /id al bot)
+      CRIBA_URL: "https://criba.tudominio.com"
+      TZ: "Europe/Madrid"
