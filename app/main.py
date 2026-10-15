@@ -12,7 +12,7 @@ from fastapi import Body, FastAPI, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import bot, config, library, tgreview, worker
+from . import bot, config, frames, library, tgreview, worker
 from .config import COOKIES, DATA, LIBRARY, UI_PASSWORD
 from .db import db, now
 from .downloader import (COOKIE_FILE, IG_DEFAULT, IG_PARTS, device_dir, device_files, sub_parts, tool_versions,
@@ -157,7 +157,8 @@ app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 def _item_out(it: dict) -> dict:
     return {k: it[k] for k in ("id", "kind", "orig_name", "save_name", "size", "source", "source_url", "post_url",
-                               "author", "caption", "posted_at", "subscription_id", "created_at", "status", "dest")}
+                               "author", "caption", "posted_at", "subscription_id", "created_at", "status", "dest",
+                               "from_item")}
 
 
 @app.get("/api/items")
@@ -244,6 +245,43 @@ async def move(ids: list[int] = Body(...), folder: str = Body(...), new_folder: 
         raise HTTPException(400, str(e))
     await tgreview.refresh_items(ids)  # los mensajes del bot reflejan la decisión
     return {"moved": moved, "folder": folder}
+
+
+def _items_full(ids: list[int]) -> list[dict]:
+    if not ids:
+        return []
+    marks = ",".join("?" * len(ids))
+    rows = db.q(f"SELECT i.*, s.name sub_name, s.folder sub_folder FROM items i "
+                f"LEFT JOIN subscriptions s ON s.id=i.subscription_id WHERE i.id IN ({marks})", ids)
+    by_id = {r["id"]: {**_item_out(r), "sub_name": r["sub_name"], "sub_folder": r["sub_folder"]} for r in rows}
+    return [by_id[i] for i in ids if i in by_id]
+
+
+@app.post("/api/items/frame")
+async def to_frame(ids: list[int] = Body(...), t: float = Body(0.0)):
+    """«Solo imagen»: cambia cada vídeo por su fotograma del segundo t (el vídeo va a la papelera)."""
+    made, errors = {}, []
+    for iid in ids:
+        try:
+            made[iid] = await asyncio.to_thread(frames.video_to_frame, iid, t)
+        except frames.FrameError as e:
+            errors.append(str(e))
+    await tgreview.refresh_items(list(made.values()))
+    if not made and errors:
+        raise HTTPException(400, errors[0])
+    return {"map": made, "items": _items_full(list(made.values())), "errors": errors}
+
+
+@app.post("/api/items/unframe")
+async def undo_frame(ids: list[int] = Body(..., embed=True)):
+    vids = []
+    for fid in ids:
+        try:
+            vids.append(await asyncio.to_thread(frames.frame_undo, fid))
+        except frames.FrameError as e:
+            raise HTTPException(400, str(e))
+    await tgreview.refresh_items(vids)
+    return {"items": _items_full(vids)}
 
 
 @app.post("/api/items/trash")

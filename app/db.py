@@ -110,6 +110,9 @@ class DB:
         cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(jobs)")}
         if "note" not in cols:
             self.conn.execute("ALTER TABLE jobs ADD COLUMN note TEXT")
+        cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(items)")}
+        if "from_item" not in cols:  # imagen sacada de un vídeo («Solo imagen»): id del vídeo
+            self.conn.execute("ALTER TABLE items ADD COLUMN from_item INTEGER")
         cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(subscriptions)")}
         if "parts" not in cols:
             # parts: qué secciones del perfil se miran (Instagram); NULL = las de por defecto.

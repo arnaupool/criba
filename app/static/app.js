@@ -163,6 +163,7 @@ function renderSelbar() {
   $("#sel-count").textContent = `${n} seleccionado${n !== 1 ? "s" : ""}`;
   const pend = S.status === "pending";
   $("#sel-move").classList.toggle("hidden", !pend);
+  $("#sel-frame").classList.toggle("hidden", !pend || !S.items.some(it => S.selected.has(it.id) && it.kind === "video"));
   $("#sel-trash").classList.toggle("hidden", !pend);
   $("#sel-restore").classList.toggle("hidden", pend);
 }
@@ -341,6 +342,7 @@ function showItem(i) {
   const pend = S.status === "pending";
   $("#v-trash").classList.toggle("hidden", !pend);
   $("#v-move").classList.toggle("hidden", !pend);
+  $("#v-frame").classList.toggle("hidden", !pend || it.kind !== "video");
   $("#v-restore").classList.toggle("hidden", pend);
   renderQuick(it, pend);
   $("#v-prev").disabled = i === 0;
@@ -378,6 +380,43 @@ async function viewerMove() {
 }
 const viewerTrash = () => { const it = S.items[S.idx]; if (it) trashIds([it.id], true); };
 
+// «Solo imagen»: el vídeo se cambia en la cola por un fotograma (fotos con música, etc.)
+function swapItems(byOld) {
+  S.items = S.items.map(it => byOld[it.id] || it);
+  S.selected.clear();
+  renderGrid();
+}
+async function frameIds(ids, t, inViewer) {
+  try {
+    const r = await api("/api/items/frame", { method: "POST", json: { ids, t } });
+    const byNew = Object.fromEntries(r.items.map(it => [it.id, it]));
+    const byOld = Object.fromEntries(Object.entries(r.map).map(([old, nw]) => [old, byNew[nw]]));
+    swapItems(byOld);
+    if (inViewer) showItem(S.idx);
+    const n = r.items.length;
+    toast(`🖼 ${n === 1 ? "Ahora es una imagen" : n + " vídeos cambiados por imagen"}${r.errors.length ? ` (${r.errors.length} no se pudieron)` : ""}`,
+      () => unframeIds(r.items.map(it => it.id), inViewer));
+  } catch (e) { fail(e); }
+}
+async function unframeIds(ids, inViewer) {
+  try {
+    const r = await api("/api/items/unframe", { method: "POST", json: { ids } });
+    const byOld = Object.fromEntries(ids.map((id, k) => [id, r.items[k]]).filter(([, v]) => v));
+    swapItems(byOld);
+    if (inViewer) showItem(S.idx);
+    toast("↩ Vuelve a ser el vídeo");
+  } catch (e) { fail(e); }
+}
+function viewerFrame() {
+  const it = S.items[S.idx];
+  if (!it || it.kind !== "video") return;
+  const v = $("video", V.media);
+  if (v) v.pause();
+  frameIds([it.id], v ? v.currentTime : 0, true);
+}
+$("#v-frame").onclick = viewerFrame;
+$("#sel-frame").onclick = () => frameIds(S.items.filter(it => S.selected.has(it.id) && it.kind === "video").map(it => it.id), 0.5);
+
 $("#v-close").onclick = closeViewer;
 $("#v-prev").onclick = () => showItem(S.idx - 1);
 $("#v-next").onclick = () => showItem(S.idx + 1);
@@ -398,6 +437,7 @@ document.addEventListener("keydown", e => {
     else if (e.key === "ArrowLeft" || e.key === "k") showItem(S.idx - 1);
     else if (pend && ["Delete", "Backspace", "x", "X"].includes(e.key)) viewerTrash();
     else if (pend && (e.key === "g" || e.key === "G" || e.key === "Enter")) viewerMove();
+    else if (pend && (e.key === "i" || e.key === "I")) viewerFrame();
     else if (pend && /^[1-4]$/.test(e.key)) $$("#v-quick button")[+e.key - 1]?.click();
     else if (e.key === " ") { const v = $("video", V.media); if (v) { v.paused ? v.play() : v.pause(); } }
     else return;

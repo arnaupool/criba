@@ -156,7 +156,28 @@ def _gdl_args(url: str, dest: Path) -> list[str]:
     args = _tool("gallery_dl") + ["-D", str(dest), "--write-metadata"]
     if c := cookies_for(url):
         args += ["--cookies", str(c)]
+    if site_of(url) == "instagram":
+        # Por defecto solo prueba «web» y «search»; si Instagram corta esas dos dice «user could not
+        # be found» aunque exista. «info» (la API de perfil) suele responder con sesión iniciada.
+        args += ["-o", "user-strategy=web,info,search"]
     return args
+
+
+IG_STORY_RE = re.compile(r"instagram\.com/stories/[^/?#]+/(\d+)")
+_IG_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+
+
+def ig_story_as_post(url: str) -> str | None:
+    """Historia con número (…/stories/usuario/ID/) → …/p/CÓDIGO/: gallery-dl la baja como una
+    publicación sin tener que buscar antes al usuario."""
+    m = IG_STORY_RE.search(url)
+    if not m:
+        return None
+    n, code = int(m.group(1)), ""
+    while n:
+        n, r = divmod(n, 64)
+        code = _IG_ALPHABET[r] + code
+    return f"https://www.instagram.com/p/{code}/"
 
 
 def _ytdlp_args(url: str, dest: Path) -> list[str]:
@@ -180,6 +201,11 @@ async def download_link(url: str, dest: Path) -> tuple[int, str]:
     logs = [f"$ gallery-dl\n{out}"]
     if _media_files(dest):
         return code, "\n".join(logs)
+    if post := ig_story_as_post(url):
+        code, out = await _run(_gdl_args(post, dest) + [post], LINK_TIMEOUT)
+        logs.append(f"$ gallery-dl (historia como publicación: {post})\n{out}")
+        if _media_files(dest):
+            return code, "\n".join(logs)
     code, out = await _run(_ytdlp_args(url, dest), LINK_TIMEOUT)
     logs.append(f"$ yt-dlp\n{out}")
     if _media_files(dest):
