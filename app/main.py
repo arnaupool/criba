@@ -514,6 +514,7 @@ async def settings():
         "versions": db.get_setting("versions", ""),
         "version": config.VERSION, "commit": config.COMMIT,
         "browser_ua": db.get_setting("browser_ua", "") or "",
+        "gdl_dev": db.get_setting("gdl_channel") == "dev",
         "pauses": [{"site": r["key"].split(":", 1)[1], "until": r["value"]}
                    for r in db.q("SELECT key, value FROM settings WHERE key LIKE 'ratelimit:%' AND value > ?",
                                  (now(),))],
@@ -538,6 +539,12 @@ async def upload_cookies(site: str, file: UploadFile):
     # en «redirect to login page» (lo explica su autor; equivale a --clear-cache)
     shutil.rmtree(DATA / "cache" / "gallery-dl", ignore_errors=True)
     return {"ok": True}
+
+
+@app.post("/api/settings/gdl_channel")
+async def set_gdl_channel(dev: bool = Body(False, embed=True)):
+    db.set_setting("gdl_channel", "dev" if dev else "stable")
+    return {"dev": dev}
 
 
 @app.post("/api/settings/ua")

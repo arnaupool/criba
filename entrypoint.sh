@@ -7,9 +7,8 @@ export XDG_CONFIG_HOME="${CRIBA_DATA:-/data}/config"
 mkdir -p "$HOME" "$XDG_CACHE_HOME" "$XDG_CONFIG_HOME"
 
 if [ "${AUTO_UPDATE:-1}" = "1" ]; then
-  echo "Actualizando gallery-dl y yt-dlp..."
-  timeout 300 python -m pip install --no-cache-dir --disable-pip-version-check -q -U \
-    --target "${CRIBA_DATA:-/data}/pyupd" gallery-dl "yt-dlp[default]" \
+  # estable o en desarrollo según Ajustes → Descargadores
+  timeout 300 python -m app.selfupdate \
     || echo "No se pudo actualizar (se usa la versión de la imagen)"
 fi
 

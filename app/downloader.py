@@ -588,9 +588,10 @@ def last_error_line(text: str) -> str:
 
 
 async def update_tools() -> str:
-    """Instala la última versión de gallery-dl y yt-dlp en /data/pyupd (tiene prioridad sobre la de la imagen)."""
-    code, out = await _run([sys.executable, "-m", "pip", "install", "--no-cache-dir", "--disable-pip-version-check",
-                            "-q", "-U", "--target", str(PYUPD), "gallery-dl", "yt-dlp[default]"], timeout=900)
+    """Instala la última versión de gallery-dl (estable o en desarrollo, según Ajustes) y yt-dlp en /data/pyupd,
+    que tiene prioridad sobre la de la imagen."""
+    from .selfupdate import command
+    code, out = await _run(command(), timeout=900)
     versions = await tool_versions()
     return f"{'OK' if code == 0 else 'Error'}\n{out.strip()}\n{versions}".strip()
 

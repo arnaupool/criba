@@ -962,6 +962,8 @@ async function loadSettings() {
 
     <div class="card"><h2>Descargadores</h2>
       <p class="hint" style="margin-top:0">gallery-dl y yt-dlp se actualizan solos al arrancar el contenedor. Si un sitio deja de funcionar, actualiza a mano.</p>
+      <label class="radio" style="margin-bottom:6px"><input type="checkbox" id="gdl-dev" ${s.gdl_dev ? "checked" : ""}>
+        gallery-dl en desarrollo: trae antes los arreglos cuando Instagram cambia algo (puede ser menos estable)</label>
       <p id="versions" class="muted">${esc(s.versions || "")}</p>
       <button class="btn" id="btn-update">⬆️ Actualizar ahora</button> <button class="btn ghost" id="btn-versions">Ver versiones</button>
       <pre class="out hidden" id="update-out"></pre>
@@ -994,6 +996,12 @@ async function loadSettings() {
     const site = $("#other-site").value.trim();
     if (!site) { toast("Escribe primero el dominio"); return; }
     uploadCookies(site, e.target.files[0]);
+  };
+  $("#gdl-dev").onchange = async e => {
+    try {
+      await api("/api/settings/gdl_channel", { method: "POST", json: { dev: e.target.checked } });
+      toast(e.target.checked ? "✓ Usará gallery-dl en desarrollo: pulsa «Actualizar ahora»" : "✓ Usará gallery-dl estable: pulsa «Actualizar ahora»");
+    } catch (err) { fail(err); }
   };
   $("#btn-update").onclick = async e => {
     e.target.disabled = true; e.target.textContent = "Actualizando… (puede tardar un minuto)";
