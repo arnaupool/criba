@@ -15,8 +15,8 @@ from fastapi.staticfiles import StaticFiles
 from . import bot, config, frames, library, tgreview, worker
 from .config import COOKIES, DATA, LIBRARY, UI_PASSWORD
 from .db import db, now
-from .downloader import (COOKIE_FILE, IG_DEFAULT, IG_PARTS, device_dir, device_files, sub_parts, tool_versions,
-                         update_tools)
+from .downloader import (COOKIE_FILE, IG_DEFAULT, IG_PARTS, clear_cookies_bad, device_dir, device_files, sub_parts,
+                         tool_versions, update_tools)
 from .subscriptions import MIN_INTERVAL, add_subscription, clean_parts, parse_initial
 from .thumbs import make_thumb
 
@@ -500,7 +500,8 @@ async def settings():
         p = COOKIES / f"{name}.txt"
         cookies.append({"site": name, "present": p.exists(),
                         "updated": time.strftime("%Y-%m-%d %H:%M", time.localtime(p.stat().st_mtime))
-                        if p.exists() else None})
+                        if p.exists() else None,
+                        "bad": db.get_setting(f"cookies_bad:{name}") if p.exists() else None})
     return {
         "cookies": cookies,
         "telegram": {"configured": bool(config.TELEGRAM_TOKEN), **bot.info,
@@ -521,8 +522,16 @@ async def upload_cookies(site: str, file: UploadFile):
     text = content.decode("utf-8", "replace")
     if "\t" not in text:
         raise HTTPException(400, "No parece un cookies.txt en formato Netscape")
+    if (need := SESSION_COOKIE.get(site)) and f"\t{need}\t" not in text:
+        raise HTTPException(400, f"Falta la cookie de sesión «{need}»: exporta las cookies con la sesión iniciada "
+                                 f"en {site}")
     (COOKIES / f"{site}.txt").write_text(text, encoding="utf-8")
+    clear_cookies_bad(site)
     return {"ok": True}
+
+
+# Cookie que indica sesión iniciada en cada sitio (sin ella las cookies no sirven)
+SESSION_COOKIE = {"instagram.com": "sessionid", "x.com": "auth_token"}
 
 
 @app.delete("/api/cookies/{site}")
@@ -531,6 +540,7 @@ async def delete_cookies(site: str):
     if p.parent != COOKIES:
         raise HTTPException(400, "Sitio no válido")
     p.unlink(missing_ok=True)
+    clear_cookies_bad(site)
     return {"ok": True}
 
 

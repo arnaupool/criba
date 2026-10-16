@@ -926,7 +926,8 @@ async function loadSettings() {
       y súbelas aquí. Si un seguimiento empieza a fallar, normalmente hay que volver a subirlas.</p>
       <div id="cookie-rows">${s.cookies.map(c => `<div class="cookie-row" data-site="${esc(c.site)}">
         <span class="site-name">${esc(c.site)}</span>
-        <span class="${c.present ? "ok" : "muted"}">${c.present ? "✓ subidas " + esc(c.updated) : "no hay"}</span>
+        <span class="${c.bad ? "bad" : c.present ? "ok" : "muted"}">${c.bad ? `⚠️ caducadas (detectado ${ago(c.bad)}): vuelve a subirlas`
+          : c.present ? "✓ subidas " + esc(c.updated) : "no hay"}</span>
         <span class="sp"></span>
         <label class="btn small">Subir cookies.txt<input type="file" accept=".txt,text/plain" hidden data-upload></label>
         ${c.present ? '<button class="btn small ghost" data-delcookie>Quitar</button>' : ""}

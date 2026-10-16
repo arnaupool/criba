@@ -59,11 +59,46 @@ def site_of(url: str) -> str:
     return host.removeprefix("www.") or "web"
 
 
-def cookies_for(url: str) -> Path | None:
+def cookie_name(url: str) -> str:
     site = site_of(url)
-    name = COOKIE_FILE.get(site, site)
-    p = COOKIES / f"{name}.txt"
+    return COOKIE_FILE.get(site, site)
+
+
+def cookies_for(url: str) -> Path | None:
+    p = COOKIES / f"{cookie_name(url)}.txt"
     return p if p.exists() and p.stat().st_size else None
+
+
+# Señales de que el sitio no reconoce la sesión (cookies caducadas o cerradas por el sitio)
+LOGIN_SIGNS = ("redirect to login page", "--cookies-from-browser or --cookies", "login required",
+               "/accounts/login")
+
+
+def login_problem(out: str) -> bool:
+    low = out.lower()
+    return any(s in low for s in LOGIN_SIGNS)
+
+
+def cookies_bad(url: str) -> str | None:
+    """Fecha en que se detectó que las cookies de ese sitio ya no valen (None si no consta)."""
+    return db.get_setting(f"cookies_bad:{cookie_name(url)}") if cookies_for(url) else None
+
+
+def mark_cookies_bad(url: str) -> bool:
+    """Apunta que las cookies del sitio ya no valen. Devuelve True si es la primera vez (para avisar)."""
+    key = f"cookies_bad:{cookie_name(url)}"
+    if db.get_setting(key):
+        return False
+    db.set_setting(key, now())
+    return True
+
+
+def clear_cookies_bad(name: str):
+    db.x("DELETE FROM settings WHERE key=?", (f"cookies_bad:{name}",))
+
+
+COOKIES_BAD_MSG = ("Las cookies de {name} ya no valen (el sitio pide iniciar sesión). Vuelve a exportarlas y "
+                   "súbelas en Ajustes → Cookies; mientras tanto no se consulta {name}.")
 
 
 def _tool(module: str) -> list[str]:
@@ -197,6 +232,8 @@ def _media_files(folder: Path) -> list[Path]:
 
 async def download_link(url: str, dest: Path) -> tuple[int, str]:
     """gallery-dl primero (redes sociales, galerías, enlaces directos), luego yt-dlp, luego extractor genérico."""
+    if cookies_bad(url):  # no insistir con una sesión que el sitio ya ha rechazado
+        return 1, "[error] " + COOKIES_BAD_MSG.format(name=cookie_name(url))
     code, out = await _run(_gdl_args(url, dest) + [url], LINK_TIMEOUT)
     logs = [f"$ gallery-dl\n{out}"]
     if _media_files(dest):
@@ -247,6 +284,8 @@ def _labels(parts) -> str:
 async def download_subscription(sub: dict, dest: Path) -> tuple[int, str, str, str | None]:
     """Devuelve (código, log, nota, secciones ya marcadas). Un archivo de descargas por seguimiento
     hace que solo se baje lo nuevo."""
+    if cookies_bad(sub["url"]):  # no insistir con una sesión que el sitio ya ha rechazado
+        return 1, "[error] " + COOKIES_BAD_MSG.format(name=cookie_name(sub["url"])), "", sub.get("parts_done")
     archive = ARCHIVES / f"sub_{sub['id']}.sqlite"
     args = _gdl_args(sub["url"], dest) + ["--download-archive", str(archive)]
     notes, logs = [], []

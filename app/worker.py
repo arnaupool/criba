@@ -7,9 +7,10 @@ from datetime import datetime, timedelta, timezone
 from . import notify
 from .config import TMP
 from .db import db, now
-from .downloader import (JobCancelled, cancel_job, cleanup_tmp, current_job, device_dir, download_link,
-                         download_subscription, forget_cancel, ingest, job_tmp, last_error_line, prepare_device_files,
-                         purge_device, site_of, tail)
+from .downloader import (COOKIES_BAD_MSG, JobCancelled, cancel_job, cleanup_tmp, cookie_name, cookies_bad, cookies_for,
+                         current_job, device_dir, download_link, download_subscription, forget_cancel, ingest, job_tmp,
+                         last_error_line, login_problem, mark_cookies_bad, prepare_device_files, purge_device, site_of,
+                         tail)
 from .library import purge_trash
 
 log = logging.getLogger("criba.worker")
@@ -68,6 +69,7 @@ async def _process_link(job: dict):
     ok = bool(ids or dups)
     db.x("UPDATE jobs SET status=?, finished_at=?, new_items=?, dup_items=?, log=? WHERE id=?",
          ("done" if ok else "error", now(), len(ids), dups, tail(out), job["id"]))
+    hint = "" if ok else await _check_login(job["url"], out)
     if job["chat_id"] and ids:
         from . import tgreview  # import tardío: necesita python-telegram-bot
         if job["message_id"]:
@@ -78,11 +80,25 @@ async def _process_link(job: dict):
         if ok:
             text = f"♻️ Ya lo tenías: {dups} repetido{'s' if dups != 1 else ''}\n{job['url']}"
         else:
-            text = f"❌ No he podido descargar nada de\n{job['url']}\n\n{last_error_line(out)}"
+            text = f"❌ No he podido descargar nada de\n{job['url']}\n\n{hint or last_error_line(out)}"
         if job["message_id"]:
             await notify.edit(job["chat_id"], job["message_id"], text)
         else:
             await notify.send(text, job["chat_id"])
+
+
+async def _check_login(url: str, out: str) -> str:
+    """Si el sitio ha pedido iniciar sesión: con cookies, se marcan como caducadas (y se avisa una vez);
+    sin cookies, se sugiere subirlas. Devuelve el texto para el usuario ("" si no era eso)."""
+    if not login_problem(out):
+        return ""
+    name = cookie_name(url)
+    if cookies_for(url):
+        msg = COOKIES_BAD_MSG.format(name=name)
+        if mark_cookies_bad(url):
+            await notify.send(f"⚠️ {msg}")
+        return msg
+    return f"{name} pide iniciar sesión para esto: sube cookies de una cuenta en Ajustes → Cookies."
 
 
 async def _process_sub(job: dict):
@@ -107,6 +123,7 @@ async def _process_sub(job: dict):
         note = "; ".join(x for x in (note, f"{n} anterior{'es' if n != 1 else ''} a seguir el perfil "
                                           f"descartad{'os' if n != 1 else 'o'} (p. ej. fijadas)") if x)
     failed = code not in (0,) and not ids
+    login_hint = await _check_login(sub["url"], out) if failed else ""
     if failed:  # «Marcados 0…» confundiría; los demás avisos (p. ej. falta de cookies) sí se dejan
         note = "; ".join(n for n in note.split("; ") if n and not n.startswith("Marcados"))
     nxt = datetime.now(timezone.utc) + timedelta(minutes=sub["interval_min"] * random.uniform(0.9, 1.1))
@@ -124,7 +141,7 @@ async def _process_sub(job: dict):
         from .bot import notify_new_items  # import tardío para evitar ciclos
         await notify_new_items(sub, ids)
     errors = (sub["errors_in_row"] + 1) if failed else 0
-    if errors == 3:
+    if errors == 3 and not login_hint and not cookies_bad(sub["url"]):  # el de cookies ya se avisa aparte
         await notify.send(f"⚠️ «{sub['name']}» ({site_of(sub['url'])}) lleva 3 comprobaciones fallando.\n"
                           f"{last_error_line(out)}\n\nSi es Instagram o X, puede que haya que renovar las cookies.")
 
