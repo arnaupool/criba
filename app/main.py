@@ -16,8 +16,8 @@ from fastapi.staticfiles import StaticFiles
 from . import bot, config, frames, library, tgreview, worker
 from .config import COOKIES, DATA, LIBRARY, UI_PASSWORD
 from .db import db, now
-from .downloader import (COOKIE_FILE, IG_DEFAULT, IG_PARTS, clear_cookies_bad, clear_ratelimit, device_dir,
-                         device_files, sub_parts, tool_versions, update_tools)
+from .downloader import (COOKIE_FILE, IG_DEFAULT, IG_PARTS, VERBOSE_ORIGIN, clear_cookies_bad, clear_ratelimit,
+                         device_dir, device_files, sub_parts, tool_versions, update_tools)
 from .subscriptions import MIN_INTERVAL, add_subscription, clean_parts, parse_initial
 from .thumbs import make_thumb
 
@@ -409,15 +409,17 @@ async def clear_jobs(status: str = Body("error", embed=True)):
 
 
 @app.post("/api/jobs/{jid}/retry")
-async def retry(jid: int):
+async def retry(jid: int, verbose: bool = False):
+    """Reintentar; con verbose=1, gallery-dl y yt-dlp en modo detallado para ver por qué falla."""
     j = db.one("SELECT * FROM jobs WHERE id=?", (jid,))
     if not j:
         raise HTTPException(404, "No existe")
+    origin = VERBOSE_ORIGIN if verbose else "web"
     if j["kind"] == "sub":
-        return {"job": worker.enqueue_sub(j["subscription_id"], "web")}
+        return {"job": worker.enqueue_sub(j["subscription_id"], origin)}
     if j["kind"] == "device":
         return {"job": worker.enqueue_device(j["url"])}
-    return {"job": worker.enqueue_link(j["url"], "web")}
+    return {"job": worker.enqueue_link(j["url"], origin)}
 
 
 # ------------------------------------------------------------------ API: seguimientos

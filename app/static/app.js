@@ -859,6 +859,7 @@ async function loadJobs() {
       <div><div class="what">${what}</div><div class="when">${ago(j.created_at)} · ${j.origin || ""} · ${res}</div></div>
       <div>${j.log ? `<button class="btn small ghost" data-log="${j.id}">Registro</button>` : ""}
         ${j.status === "error" || j.status === "cancelled" ? `<button class="btn small" data-retry="${j.id}">Reintentar</button>` : ""}
+        ${j.status === "error" && j.kind !== "device" ? `<button class="btn small ghost" data-retry="${j.id}" data-verbose="1" title="Repite la descarga con el registro detallado de gallery-dl y yt-dlp, para ver por qué falla">🔍 Con detalle</button>` : ""}
         ${j.status === "running" || j.status === "queued" ? `<button class="btn small danger" data-cancel="${j.id}">Cancelar</button>` : ""}
         ${["done", "error", "cancelled"].includes(j.status) ? `<button class="btn small ghost" data-deljob="${j.id}" title="Borrar de la lista" aria-label="Borrar de la lista">✕</button>` : ""}</div>
       ${j.log ? `<pre data-id="${j.id}" class="${open.has(String(j.id)) ? "" : "hidden"}">${esc(j.log)}</pre>` : ""}
@@ -874,7 +875,13 @@ $("#jobs").addEventListener("click", async e => {
   const l = e.target.closest("[data-log]");
   if (l) $(`#jobs pre[data-id="${l.dataset.log}"]`).classList.toggle("hidden");
   const r = e.target.closest("[data-retry]");
-  if (r) { try { await api(`/api/jobs/${r.dataset.retry}/retry`, { method: "POST" }); loadJobs(); } catch (err) { fail(err); } }
+  if (r) {
+    try {
+      await api(`/api/jobs/${r.dataset.retry}/retry${r.dataset.verbose ? "?verbose=1" : ""}`, { method: "POST" });
+      if (r.dataset.verbose) toast("🔍 Reintentando con registro detallado: ábrelo cuando acabe");
+      loadJobs();
+    } catch (err) { fail(err); }
+  }
   const c = e.target.closest("[data-cancel]");
   if (c) {
     c.disabled = true;

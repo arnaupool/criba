@@ -154,6 +154,9 @@ def _env() -> dict:
 
 # Trabajo en curso: lo fija el worker para que _run vaya guardando el registro en directo
 current_job: contextvars.ContextVar[int | None] = contextvars.ContextVar("current_job", default=None)
+# «Reintentar con detalle»: gallery-dl y yt-dlp en modo -v y registro más largo
+verbose_job: contextvars.ContextVar[bool] = contextvars.ContextVar("verbose_job", default=False)
+VERBOSE_ORIGIN = "detalle"
 LIVE_EVERY = 3  # segundos entre volcados del registro en directo
 # Tiempo máximo de cada paso de una comprobación (salvo «todo el histórico»)
 STEP_TIMEOUT = 30 * 60
@@ -228,7 +231,7 @@ async def _collect(proc, job_id: int | None, timeout: int) -> tuple[int, str]:
 
 
 def _gdl_args(url: str, dest: Path) -> list[str]:
-    args = _tool("gallery_dl") + ["-D", str(dest), "--write-metadata"]
+    args = _tool("gallery_dl") + ["-D", str(dest), "--write-metadata"] + (["-v"] if verbose_job.get() else [])
     if c := cookies_for(url):
         args += ["--cookies", str(c)]
         if ua := browser_ua():  # las cookies van ligadas al navegador del que salieron
@@ -260,6 +263,7 @@ def ig_story_as_post(url: str) -> str | None:
 
 def _ytdlp_args(url: str, dest: Path) -> list[str]:
     args = _tool("yt_dlp") + [
+        *(["-v"] if verbose_job.get() else []),
         "--no-progress", "--write-info-json", "--no-mtime", "--merge-output-format", "mp4",
         "--playlist-end", "50", "-o", str(dest / "%(title).80B [%(id)s].%(ext)s"),
     ]
@@ -573,7 +577,8 @@ def cleanup_tmp(p: Path):
     shutil.rmtree(p, ignore_errors=True)
 
 
-def tail(text: str, n: int = 6000) -> str:
+def tail(text: str, n: int | None = None) -> str:
+    n = n or (60000 if verbose_job.get() else 6000)
     return text if len(text) <= n else "…\n" + text[-n:]
 
 

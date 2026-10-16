@@ -10,7 +10,8 @@ from .db import db, now
 from .downloader import (COOKIES_BAD_MSG, RATE_PAUSE_H, JobCancelled, blocked_reason, cancel_job, cleanup_tmp,
                          cookie_name, cookies_for, current_job, device_dir, download_link, download_subscription,
                          forget_cancel, ingest, job_tmp, last_error_line, login_problem, mark_cookies_bad,
-                         mark_ratelimited, prepare_device_files, purge_device, rate_problem, site_of, tail)
+                         mark_ratelimited, prepare_device_files, purge_device, rate_problem, site_of, tail,
+                         VERBOSE_ORIGIN, verbose_job)
 from .library import purge_trash
 
 log = logging.getLogger("criba.worker")
@@ -179,6 +180,7 @@ async def worker(kind: str):
                 pass
             continue
         token = current_job.set(job["id"])
+        vtoken = verbose_job.set(job["origin"] == VERBOSE_ORIGIN)
         try:
             await handler(job)
         except JobCancelled:
@@ -196,6 +198,7 @@ async def worker(kind: str):
                           job["subscription_id"]))
         finally:
             current_job.reset(token)
+            verbose_job.reset(vtoken)
             forget_cancel(job["id"])
 
 
