@@ -10,7 +10,7 @@ import shutil
 import sqlite3
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -99,6 +99,46 @@ def clear_cookies_bad(name: str):
 
 COOKIES_BAD_MSG = ("Las cookies de {name} ya no valen (el sitio pide iniciar sesión). Vuelve a exportarlas y "
                    "súbelas en Ajustes → Cookies; mientras tanto no se consulta {name}.")
+
+# «429 Too Many Requests»: el sitio pide ir más despacio. Se deja de consultar durante RATE_PAUSE_H horas
+# (el autor de gallery-dl cuenta que Instagram mantiene el bloqueo 12–24 h).
+RATE_PAUSE_H = 12
+
+
+def rate_problem(out: str) -> bool:
+    return "429 too many requests" in out.lower()
+
+
+def ratelimited_until(url: str) -> str | None:
+    until = db.get_setting(f"ratelimit:{site_of(url)}")
+    return until if until and until > now() else None
+
+
+def mark_ratelimited(url: str) -> bool:
+    """Pausa el sitio RATE_PAUSE_H horas. Devuelve True si no lo estaba ya (para avisar una vez)."""
+    first = ratelimited_until(url) is None
+    until = datetime.now(timezone.utc) + timedelta(hours=RATE_PAUSE_H)
+    db.set_setting(f"ratelimit:{site_of(url)}", until.isoformat(timespec="seconds"))
+    return first
+
+
+def clear_ratelimit(site: str):
+    db.x("DELETE FROM settings WHERE key=?", (f"ratelimit:{site}",))
+
+
+def blocked_reason(url: str) -> str | None:
+    """Motivo para no consultar ahora ese sitio (cookies caducadas o pausa por 429), o None."""
+    if cookies_bad(url):
+        return COOKIES_BAD_MSG.format(name=cookie_name(url))
+    if until := ratelimited_until(url):
+        return (f"{site_of(url)} pidió ir más despacio (429): pausado hasta {until[:16].replace('T', ' ')} UTC. "
+                "Se reanuda solo; también puedes reanudarlo en Ajustes.")
+    return None
+
+
+def browser_ua() -> str:
+    """User-Agent del navegador del que salen las cookies (Ajustes); se usa junto con ellas."""
+    return db.get_setting("browser_ua", "") or ""
 
 
 def _tool(module: str) -> list[str]:
@@ -191,10 +231,13 @@ def _gdl_args(url: str, dest: Path) -> list[str]:
     args = _tool("gallery_dl") + ["-D", str(dest), "--write-metadata"]
     if c := cookies_for(url):
         args += ["--cookies", str(c)]
+        if ua := browser_ua():  # las cookies van ligadas al navegador del que salieron
+            args += ["-o", f"user-agent={ua}"]
     if site_of(url) == "instagram":
         # Por defecto solo prueba «web» y «search»; si Instagram corta esas dos dice «user could not
         # be found» aunque exista. «info» (la API de perfil) suele responder con sesión iniciada.
-        args += ["-o", "user-strategy=web,info,search"]
+        # Más espera entre peticiones que los 6–12 s por defecto: Instagram limita por ritmo.
+        args += ["-o", "user-strategy=web,info,search", "-o", "sleep-request=10.0-20.0"]
     return args
 
 
@@ -222,6 +265,8 @@ def _ytdlp_args(url: str, dest: Path) -> list[str]:
     ]
     if c := cookies_for(url):
         args += ["--cookies", str(c)]
+        if ua := browser_ua():
+            args += ["--user-agent", ua]
     return args + [url]
 
 
@@ -232,8 +277,8 @@ def _media_files(folder: Path) -> list[Path]:
 
 async def download_link(url: str, dest: Path) -> tuple[int, str]:
     """gallery-dl primero (redes sociales, galerías, enlaces directos), luego yt-dlp, luego extractor genérico."""
-    if cookies_bad(url):  # no insistir con una sesión que el sitio ya ha rechazado
-        return 1, "[error] " + COOKIES_BAD_MSG.format(name=cookie_name(url))
+    if reason := blocked_reason(url):  # no insistir: sesión rechazada o pausa por 429
+        return 1, "[error] " + reason
     code, out = await _run(_gdl_args(url, dest) + [url], LINK_TIMEOUT)
     logs = [f"$ gallery-dl\n{out}"]
     if _media_files(dest):
@@ -284,8 +329,8 @@ def _labels(parts) -> str:
 async def download_subscription(sub: dict, dest: Path) -> tuple[int, str, str, str | None]:
     """Devuelve (código, log, nota, secciones ya marcadas). Un archivo de descargas por seguimiento
     hace que solo se baje lo nuevo."""
-    if cookies_bad(sub["url"]):  # no insistir con una sesión que el sitio ya ha rechazado
-        return 1, "[error] " + COOKIES_BAD_MSG.format(name=cookie_name(sub["url"])), "", sub.get("parts_done")
+    if reason := blocked_reason(sub["url"]):  # no insistir: sesión rechazada o pausa por 429
+        return 1, "[error] " + reason, "", sub.get("parts_done")
     archive = ARCHIVES / f"sub_{sub['id']}.sqlite"
     args = _gdl_args(sub["url"], dest) + ["--download-archive", str(archive)]
     notes, logs = [], []

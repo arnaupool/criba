@@ -914,6 +914,11 @@ async function loadSettings() {
     : esc(s.version);
   $("#settings").innerHTML = `<div class="settings">
     <div class="card"><h2>Versión</h2><dl class="kv"><dt>Criba</dt><dd>${ver}</dd></dl></div>
+    ${s.pauses.length ? `<div class="card"><h2>⏸ Sitios en pausa</h2>
+      <p class="hint" style="margin-top:0">Respondieron «demasiadas peticiones» (429) y no se consultan hasta la hora indicada.</p>
+      ${s.pauses.map(p => `<div class="cookie-row"><span class="site-name">${esc(p.site)}</span>
+        <span class="muted">se reanuda ${ago(p.until)}</span><span class="sp"></span>
+        <button class="btn small" data-resume="${esc(p.site)}">Reanudar ya</button></div>`).join("")}</div>` : ""}
     <div class="card"><h2>Telegram</h2><dl class="kv">
       <dt>Bot</dt><dd>${tgState}</dd>
       <dt>Usuarios autorizados</dt><dd>${tg.allowed.length ? tg.allowed.join(", ") : '<span class="bad">ninguno</span> — escribe /id al bot y pon tu ID en TELEGRAM_ALLOWED_IDS'}</dd>
@@ -935,6 +940,12 @@ async function loadSettings() {
       <div class="cookie-row"><input id="other-site" placeholder="otro dominio (ej. tumblr.com)" style="max-width:240px">
         <label class="btn small">Subir<input type="file" accept=".txt,text/plain" hidden id="other-upload"></label></div>
       </div>
+      <h2 style="margin-top:16px">User-Agent del navegador</h2>
+      <p class="hint" style="margin-top:0">Las cookies van ligadas al navegador del que salen. Pega aquí su User-Agent para
+      que Criba se presente igual al usarlas. Si exportaste las cookies desde este mismo navegador, pulsa «Usar el de este navegador».</p>
+      <div class="row"><input id="ua-input" value="${esc(s.browser_ua)}" placeholder="vacío = el de gallery-dl / yt-dlp"></div>
+      <div class="row" style="margin-top:8px"><button class="btn small" id="ua-mine">Usar el de este navegador</button>
+        <button class="btn small primary" id="ua-save">Guardar</button></div>
     </div>
 
     <div class="card"><h2>Marcador «Enviar a Criba»</h2>
@@ -962,6 +973,15 @@ async function loadSettings() {
   $$("#cookie-rows [data-upload]").forEach(inp => inp.onchange = () => uploadCookies(inp.closest(".cookie-row").dataset.site, inp.files[0]));
   $$("#cookie-rows [data-delcookie]").forEach(b => b.onclick = async () => {
     try { await api(`/api/cookies/${b.closest(".cookie-row").dataset.site}`, { method: "DELETE" }); loadSettings(); } catch (e) { fail(e); }
+  });
+  $("#ua-mine").onclick = () => { $("#ua-input").value = navigator.userAgent; };
+  $("#ua-save").onclick = async () => {
+    try { await api("/api/settings/ua", { method: "POST", json: { ua: $("#ua-input").value } }); toast("✓ User-Agent guardado"); }
+    catch (e) { fail(e); }
+  };
+  $$("[data-resume]").forEach(b => b.onclick = async () => {
+    try { await api(`/api/ratelimit/${encodeURIComponent(b.dataset.resume)}`, { method: "DELETE" }); toast("▶ Reanudado"); loadSettings(); }
+    catch (e) { fail(e); }
   });
   $("#other-upload").onchange = e => {
     const site = $("#other-site").value.trim();

@@ -7,10 +7,10 @@ from datetime import datetime, timedelta, timezone
 from . import notify
 from .config import TMP
 from .db import db, now
-from .downloader import (COOKIES_BAD_MSG, JobCancelled, cancel_job, cleanup_tmp, cookie_name, cookies_bad, cookies_for,
-                         current_job, device_dir, download_link, download_subscription, forget_cancel, ingest, job_tmp,
-                         last_error_line, login_problem, mark_cookies_bad, prepare_device_files, purge_device, site_of,
-                         tail)
+from .downloader import (COOKIES_BAD_MSG, RATE_PAUSE_H, JobCancelled, blocked_reason, cancel_job, cleanup_tmp,
+                         cookie_name, cookies_for, current_job, device_dir, download_link, download_subscription,
+                         forget_cancel, ingest, job_tmp, last_error_line, login_problem, mark_cookies_bad,
+                         mark_ratelimited, prepare_device_files, purge_device, rate_problem, site_of, tail)
 from .library import purge_trash
 
 log = logging.getLogger("criba.worker")
@@ -89,8 +89,16 @@ async def _process_link(job: dict):
 
 async def _check_login(url: str, out: str) -> str:
     """Si el sitio ha pedido iniciar sesión: con cookies, se marcan como caducadas (y se avisa una vez);
-    sin cookies, se sugiere subirlas. Devuelve el texto para el usuario ("" si no era eso)."""
+    sin cookies, se sugiere subirlas. Si ha respondido 429, se pausa ese sitio unas horas.
+    Devuelve el texto para el usuario ("" si no era nada de eso)."""
     if not login_problem(out):
+        if rate_problem(out):
+            site = site_of(url)
+            msg = (f"{site} responde «demasiadas peticiones» (429). Dejo de consultar {site} durante "
+                   f"{RATE_PAUSE_H} h para que no marquen la cuenta; se reanuda solo (o desde Ajustes).")
+            if mark_ratelimited(url):
+                await notify.send(f"⏸ {msg}")
+            return msg
         return ""
     name = cookie_name(url)
     if cookies_for(url):
@@ -141,7 +149,7 @@ async def _process_sub(job: dict):
         from .bot import notify_new_items  # import tardío para evitar ciclos
         await notify_new_items(sub, ids)
     errors = (sub["errors_in_row"] + 1) if failed else 0
-    if errors == 3 and not login_hint and not cookies_bad(sub["url"]):  # el de cookies ya se avisa aparte
+    if errors == 3 and not login_hint and not blocked_reason(sub["url"]):  # esos ya se avisan aparte
         await notify.send(f"⚠️ «{sub['name']}» ({site_of(sub['url'])}) lleva 3 comprobaciones fallando.\n"
                           f"{last_error_line(out)}\n\nSi es Instagram o X, puede que haya que renovar las cookies.")
 

@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import logging
 import secrets
+import shutil
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -15,8 +16,8 @@ from fastapi.staticfiles import StaticFiles
 from . import bot, config, frames, library, tgreview, worker
 from .config import COOKIES, DATA, LIBRARY, UI_PASSWORD
 from .db import db, now
-from .downloader import (COOKIE_FILE, IG_DEFAULT, IG_PARTS, clear_cookies_bad, device_dir, device_files, sub_parts,
-                         tool_versions, update_tools)
+from .downloader import (COOKIE_FILE, IG_DEFAULT, IG_PARTS, clear_cookies_bad, clear_ratelimit, device_dir,
+                         device_files, sub_parts, tool_versions, update_tools)
 from .subscriptions import MIN_INTERVAL, add_subscription, clean_parts, parse_initial
 from .thumbs import make_thumb
 
@@ -510,6 +511,10 @@ async def settings():
         "public_url": config.PUBLIC_URL, "password": bool(UI_PASSWORD),
         "versions": db.get_setting("versions", ""),
         "version": config.VERSION, "commit": config.COMMIT,
+        "browser_ua": db.get_setting("browser_ua", "") or "",
+        "pauses": [{"site": r["key"].split(":", 1)[1], "until": r["value"]}
+                   for r in db.q("SELECT key, value FROM settings WHERE key LIKE 'ratelimit:%' AND value > ?",
+                                 (now(),))],
     }
 
 
@@ -527,6 +532,22 @@ async def upload_cookies(site: str, file: UploadFile):
                                  f"en {site}")
     (COOKIES / f"{site}.txt").write_text(text, encoding="utf-8")
     clear_cookies_bad(site)
+    # gallery-dl guarda en caché la sesión anterior: con cookies nuevas puede seguir usándola y acabar
+    # en «redirect to login page» (lo explica su autor; equivale a --clear-cache)
+    shutil.rmtree(DATA / "cache" / "gallery-dl", ignore_errors=True)
+    return {"ok": True}
+
+
+@app.post("/api/settings/ua")
+async def set_browser_ua(ua: str = Body("", embed=True)):
+    ua = " ".join(ua.split())[:400]
+    db.set_setting("browser_ua", ua)
+    return {"ua": ua}
+
+
+@app.delete("/api/ratelimit/{site}")
+async def resume_site(site: str):
+    clear_ratelimit(site)
     return {"ok": True}
 
 
