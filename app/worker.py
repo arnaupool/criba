@@ -11,7 +11,7 @@ from .downloader import (COOKIES_BAD_MSG, RATE_PAUSE_H, JobCancelled, blocked_re
                          cookie_name, cookies_for, current_job, device_dir, download_link, download_subscription,
                          forget_cancel, ingest, job_tmp, last_error_line, login_problem, mark_cookies_bad,
                          mark_ratelimited, prepare_device_files, purge_device, rate_problem, site_of, tail,
-                         VERBOSE_ORIGIN, verbose_job)
+                         TRANSIENT_ALERT, transient_problem, VERBOSE_ORIGIN, verbose_job)
 from .library import purge_trash
 
 log = logging.getLogger("criba.worker")
@@ -133,24 +133,37 @@ async def _process_sub(job: dict):
                                           f"descartad{'os' if n != 1 else 'o'} (p. ej. fijadas)") if x)
     failed = code not in (0,) and not ids
     login_hint = await _check_login(sub["url"], out) if failed else ""
+    # corte temporal del sitio (p. ej. Instagram «redirect to home page», intermitente): no es un fallo;
+    # lo ya visto queda en el archivo y la siguiente comprobación sigue donde se quedó
+    transient = failed and not login_hint and transient_problem(out)
     if failed:  # «Marcados 0…» confundiría; los demás avisos (p. ej. falta de cookies) sí se dejan
         note = "; ".join(n for n in note.split("; ") if n and not n.startswith("Marcados"))
+    if transient:
+        note = "; ".join(x for x in (note, f"{site_of(sub['url'])} cortó la comprobación (temporal): "
+                                           "se reintenta en la siguiente") if x)
     nxt = datetime.now(timezone.utc) + timedelta(minutes=sub["interval_min"] * random.uniform(0.9, 1.1))
     db.x("""UPDATE subscriptions SET last_check=?, next_check=?, last_new=?, total=total+?,
             baseline_done = CASE WHEN ? THEN baseline_done ELSE 1 END,
             parts_done = CASE WHEN ? AND baseline_done=0 THEN parts_done ELSE ? END,
             last_error=?, errors_in_row = CASE WHEN ? THEN errors_in_row+1 ELSE 0 END WHERE id=?""",
          (now(), nxt.isoformat(timespec="seconds"), len(ids), len(ids), failed, failed, parts_done,
-          last_error_line(out) if failed else None, failed, sub["id"]))
+          last_error_line(out) if failed and not transient else None, failed, sub["id"]))
     # la nota va delante del registro ya recortado para que no se pierda
     log_text = f"{note}\n\n{tail(out)}" if note else tail(out)
     db.x("UPDATE jobs SET status=?, finished_at=?, new_items=?, dup_items=?, log=?, note=? WHERE id=?",
-         ("error" if failed else "done", now(), len(ids), dups, log_text, note or None, job["id"]))
+         ("error" if failed and not transient else "done", now(), len(ids), dups, log_text, note or None,
+          job["id"]))
     if ids and notify.bot:
         from .bot import notify_new_items  # import tardío para evitar ciclos
         await notify_new_items(sub, ids)
     errors = (sub["errors_in_row"] + 1) if failed else 0
-    if errors == 3 and not login_hint and not blocked_reason(sub["url"]):  # esos ya se avisan aparte
+    if login_hint or blocked_reason(sub["url"]):  # esos ya se avisan aparte
+        return
+    if transient and errors == TRANSIENT_ALERT:
+        await notify.send(f"⚠️ «{sub['name']}»: {site_of(sub['url'])} ha cortado {errors} comprobaciones seguidas.\n"
+                          f"{last_error_line(out)}\n\nSuele pasarse solo; si sigue, prueba a quitar Reels de ese "
+                          "perfil o a renovar las cookies.")
+    elif failed and not transient and errors == 3:
         await notify.send(f"⚠️ «{sub['name']}» ({site_of(sub['url'])}) lleva 3 comprobaciones fallando.\n"
                           f"{last_error_line(out)}\n\nSi es Instagram o X, puede que haya que renovar las cookies.")
 

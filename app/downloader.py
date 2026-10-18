@@ -100,6 +100,17 @@ def clear_cookies_bad(name: str):
 COOKIES_BAD_MSG = ("Las cookies de {name} ya no valen (el sitio pide iniciar sesión). Vuelve a exportarlas y "
                    "súbelas en Ajustes → Cookies; mientras tanto no se consulta {name}.")
 
+# Cortes intermitentes que se arreglan solos al reintentar más tarde (Instagram corta peticiones a veces
+# con una redirección a la portada: https://codeberg.org/mikf/gallery-dl/issues/480)
+TRANSIENT_SIGNS = ("redirect to home page",)
+TRANSIENT_ALERT = 5  # comprobaciones cortadas seguidas antes de avisar
+
+
+def transient_problem(out: str) -> bool:
+    low = out.lower()
+    return any(s in low for s in TRANSIENT_SIGNS)
+
+
 # «429 Too Many Requests»: el sitio pide ir más despacio. Se deja de consultar durante RATE_PAUSE_H horas
 # (el autor de gallery-dl cuenta que Instagram mantiene el bloqueo 12–24 h).
 RATE_PAUSE_H = 12
