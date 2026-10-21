@@ -98,14 +98,14 @@ async def _check_login(url: str, out: str) -> str:
             msg = (f"{site} responde «demasiadas peticiones» (429). Dejo de consultar {site} durante "
                    f"{RATE_PAUSE_H} h para que no marquen la cuenta; se reanuda solo (o desde Ajustes).")
             if mark_ratelimited(url):
-                await notify.send(f"⏸ {msg}")
+                await notify.send(f"⏸ {msg}", path="#ajustes")
             return msg
         return ""
     name = cookie_name(url)
     if cookies_for(url):
         msg = COOKIES_BAD_MSG.format(name=name)
         if mark_cookies_bad(url):
-            await notify.send(f"⚠️ {msg}")
+            await notify.send(f"⚠️ {msg}", path="#ajustes")
         return msg
     return f"{name} pide iniciar sesión para esto: sube cookies de una cuenta en Ajustes → Cookies."
 
@@ -162,10 +162,11 @@ async def _process_sub(job: dict):
     if transient and errors == TRANSIENT_ALERT:
         await notify.send(f"⚠️ «{sub['name']}»: {site_of(sub['url'])} ha cortado {errors} comprobaciones seguidas.\n"
                           f"{last_error_line(out)}\n\nSuele pasarse solo; si sigue, prueba a quitar Reels de ese "
-                          "perfil o a renovar las cookies.")
+                          "perfil o a renovar las cookies.", path="#seguimientos")
     elif failed and not transient and errors == 3:
         await notify.send(f"⚠️ «{sub['name']}» ({site_of(sub['url'])}) lleva 3 comprobaciones fallando.\n"
-                          f"{last_error_line(out)}\n\nSi es Instagram o X, puede que haya que renovar las cookies.")
+                          f"{last_error_line(out)}\n\nSi es Instagram o X, puede que haya que renovar las cookies.",
+                          path="#seguimientos")
 
 
 async def _process_device(job: dict):

@@ -5,6 +5,7 @@ import re
 
 from telegram import Update
 from telegram.constants import ChatAction
+from telegram.error import BadRequest
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 
 from . import notify
@@ -30,6 +31,17 @@ HELP = (
 )
 
 
+async def say(msg, text: str, **_):
+    """Responde con el botón «🌐 Abrir Criba» (sin él si Telegram no acepta la URL)."""
+    markup = notify.web_markup()
+    try:
+        return await msg.reply_text(text, reply_markup=markup, disable_web_page_preview=True)
+    except BadRequest as e:
+        if markup is None or "url" not in str(e).lower():
+            raise
+        return await msg.reply_text(text, disable_web_page_preview=True)
+
+
 def _allowed(update: Update) -> bool:
     user = update.effective_user
     return bool(user and user.id in TELEGRAM_ALLOWED_IDS)
@@ -37,14 +49,14 @@ def _allowed(update: Update) -> bool:
 
 async def _deny(update: Update):
     uid = update.effective_user.id if update.effective_user else "?"
-    await update.effective_message.reply_text(
+    await update.effective_message.reply_text(  # sin botón: puede ser un desconocido
         f"No estás autorizado. Tu ID es {uid}; añádelo a TELEGRAM_ALLOWED_IDS en la configuración del contenedor.")
 
 
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not _allowed(update):
         return await _deny(update)
-    await update.effective_message.reply_text(HELP)
+    await say(update.effective_message, HELP)
 
 
 async def cmd_id(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -59,16 +71,15 @@ async def cmd_cola(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     text = f"📥 {n} pendiente{'s' if n != 1 else ''} de revisar"
     if running:
         text += f"\n⏳ {running} descarga{'s' if running != 1 else ''} en curso"
-    if link := notify.ui_link():
-        text += f"\n{link}"
-    await update.effective_message.reply_text(text, disable_web_page_preview=True)
+    await say(update.effective_message, text)
 
 
 async def cmd_seguir(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not _allowed(update):
         return await _deny(update)
     if not ctx.args:
-        return await update.effective_message.reply_text(
+        return await say(
+        update.effective_message,
             "Uso: /seguir <url del perfil> [nuevo|N|todo]\n"
             "nuevo (por defecto): solo lo que publique a partir de ahora\n"
             "N: además, sus últimos N archivos\n"
@@ -77,8 +88,9 @@ async def cmd_seguir(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         initial = parse_initial(ctx.args[1] if len(ctx.args) > 1 else "nuevo")
         sub = add_subscription(ctx.args[0], initial=initial)
     except ValueError as e:
-        return await update.effective_message.reply_text(f"❌ {e}")
-    await update.effective_message.reply_text(
+        return await say(update.effective_message, f"❌ {e}")
+    await say(
+        update.effective_message,
         f"👀 Siguiendo a «{sub['name']}» ({sub['site']}), cada {sub['interval_min']} min.\n"
         "Lo configuras (intervalo, carpeta sugerida…) desde la web.")
 
@@ -88,12 +100,12 @@ async def cmd_seguimientos(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return await _deny(update)
     subs = db.q("SELECT * FROM subscriptions ORDER BY name")
     if not subs:
-        return await update.effective_message.reply_text("No sigues a nadie todavía. Usa /seguir <url>.")
+        return await say(update.effective_message, "No sigues a nadie todavía. Usa /seguir <url>.")
     lines = []
     for s in subs:
         mark = "⏸" if not s["enabled"] else ("⚠️" if s["errors_in_row"] else "✅")
         lines.append(f"{mark} {s['name']} ({s['site']}) · {s['total']} descargados")
-    await update.effective_message.reply_text("\n".join(lines))
+    await say(update.effective_message, "\n".join(lines))
 
 
 async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -106,9 +118,9 @@ async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             urls.append(ent.url)
     urls = list(dict.fromkeys(u.rstrip(").,;!?") for u in urls))
     if not urls:
-        return await msg.reply_text("Mándame un enlace (o una foto / vídeo). /start para ver la ayuda.")
+        return await say(msg, "Mándame un enlace (o una foto / vídeo). /start para ver la ayuda.")
     for url in urls:
-        reply = await msg.reply_text(f"⏳ Descargando…\n{url}", disable_web_page_preview=True)
+        reply = await say(msg, f"⏳ Descargando…\n{url}", disable_web_page_preview=True)
         enqueue_link(url, "telegram", msg.chat_id, reply.message_id)
 
 
@@ -125,7 +137,7 @@ async def on_media(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         ext = ".mp4" if (msg.video or msg.animation or msg.video_note) else ""
         name = getattr(att, "file_name", None) or f"telegram_{att.file_unique_id}{ext}"
     if (att.file_size or 0) > 20 * 1024 * 1024:
-        return await msg.reply_text("❌ Telegram no deja a los bots descargar archivos de más de 20 MB. "
+        return await say(msg, "❌ Telegram no deja a los bots descargar archivos de más de 20 MB. "
                                     "Mándame el enlace de donde lo sacaste.")
     await ctx.bot.send_chat_action(msg.chat_id, ChatAction.TYPING)
     tmp = job_tmp(-msg.message_id)
@@ -143,12 +155,12 @@ async def on_media(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     finally:
         cleanup_tmp(tmp)
     if ids:
-        reply = await msg.reply_text("✅ Añadido a la cola")
+        reply = await say(msg, "✅ Añadido a la cola")
         await attach(msg.chat_id, reply.message_id, "📎 Archivo de Telegram", ids)
     elif dups:
-        await msg.reply_text("♻️ Ya lo tenías (repetido)")
+        await say(msg, "♻️ Ya lo tenías (repetido)")
     else:
-        await msg.reply_text("❌ No es una foto ni un vídeo que sepa guardar")
+        await say(msg, "❌ No es una foto ni un vídeo que sepa guardar")
 
 
 async def notify_new_items(sub: dict, ids: list[int]):

@@ -4,7 +4,6 @@ import json
 import logging
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.error import BadRequest
 
 from . import library, notify
 from .db import db, now
@@ -29,7 +28,7 @@ def _plural(n: int, one: str, many: str) -> str:
     return one if n == 1 else f"{n} {many}"
 
 
-def render(batch: dict, with_url: bool = True) -> tuple[str, InlineKeyboardMarkup | None]:
+def render(batch: dict) -> tuple[str, InlineKeyboardMarkup | None]:
     items = db.q("SELECT i.id, i.status, i.dest FROM items i JOIN tg_batch_items b ON b.item_id=i.id "
                  "WHERE b.batch_id=?", (batch["id"],))
     pending = [i for i in items if i["status"] == "pending"]
@@ -60,35 +59,21 @@ def render(batch: dict, with_url: bool = True) -> tuple[str, InlineKeyboardMarku
         if folders:
             rows.append([InlineKeyboardButton(f"📁 {_short(f)}", callback_data=f"cb:{bid}:f{k}")
                          for k, f in enumerate(folders)])
-        last = [InlineKeyboardButton(f"🗑 Borrar{every}", callback_data=f"cb:{bid}:t")]
-        if with_url and (link := notify.ui_link()):
-            last.append(InlineKeyboardButton("🌐 Revisar en la web", url=link))
-        rows.append(last)
+        rows.append([InlineKeyboardButton(f"🗑 Borrar{every}", callback_data=f"cb:{bid}:t")])
     elif kept or any(i["status"] == "trashed" for i in gone):
         rows.append([InlineKeyboardButton("↩ Devolver a la cola", callback_data=f"cb:{bid}:r")])
-    return text, (InlineKeyboardMarkup(rows) if rows else None)
+    # el botón a la web va siempre, también cuando ya está todo decidido
+    return text, notify.web_markup(rows=rows)
 
 
 async def _edit(batch: dict):
     if notify.bot is None:
         return
-    for with_url in (True, False):
-        text, markup = render(batch, with_url)
-        try:
-            await notify.bot.edit_message_text(text, chat_id=batch["chat_id"], message_id=batch["message_id"],
-                                               reply_markup=markup, disable_web_page_preview=True)
-            return
-        except BadRequest as e:
-            err = str(e).lower()
-            if "not modified" in err:
-                return
-            if with_url and "url" in err:  # Telegram no acepta CRIBA_URL (p. ej. una IP local) en un botón
-                continue
-            log.warning("No se pudo actualizar el mensaje %s: %s", batch["message_id"], e)
-            return
-        except Exception as e:  # noqa: BLE001
-            log.warning("No se pudo actualizar el mensaje %s: %s", batch["message_id"], e)
-            return
+    text, markup = render(batch)
+    try:
+        await notify.safe_edit(batch["chat_id"], batch["message_id"], text, markup)
+    except Exception as e:  # noqa: BLE001
+        log.warning("No se pudo actualizar el mensaje %s: %s", batch["message_id"], e)
 
 
 def _create(chat_id: int, message_id: int, title: str, ids: list[int], suggested: str | None) -> dict:
@@ -112,14 +97,8 @@ async def send(chat_id: int, title: str, ids: list[int], suggested: str | None =
         return
     batch = _create(chat_id, 0, title, ids, suggested)
     try:
-        try:
-            text, markup = render(batch)
-            msg = await notify.bot.send_message(chat_id, text, reply_markup=markup, disable_web_page_preview=True)
-        except BadRequest as e:
-            if "url" not in str(e).lower():
-                raise
-            text, markup = render(batch, with_url=False)
-            msg = await notify.bot.send_message(chat_id, text, reply_markup=markup, disable_web_page_preview=True)
+        text, markup = render(batch)
+        msg = await notify.safe_send(chat_id, text, markup)
         db.x("UPDATE tg_batches SET message_id=? WHERE id=?", (msg.message_id, batch["id"]))
     except Exception as e:  # noqa: BLE001
         log.warning("No se pudo avisar a %s: %s", chat_id, e)
