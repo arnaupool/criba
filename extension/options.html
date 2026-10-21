@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Criba · cookies</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body class="page">
+  <h1><img src="icons/icon48.png" alt=""> Criba · cookies</h1>
+  <p class="muted">Envía a tu Criba las cookies de Instagram y X de <b>este navegador</b> cuando cambian (por ejemplo, al
+  volver a iniciar sesión). Instálala solo en el perfil del navegador donde tengas la <b>cuenta secundaria</b>.</p>
+
+  <label>Dirección de Criba
+    <input id="url" placeholder="https://criba.tudominio.com">
+  </label>
+  <label>Token
+    <input id="token" placeholder="Cópialo de Criba → Ajustes → Extensión del navegador">
+  </label>
+  <fieldset>
+    <legend>Qué enviar</legend>
+    <label class="check"><input type="checkbox" id="site-instagram"> Instagram</label>
+    <label class="check"><input type="checkbox" id="site-x"> X (Twitter)</label>
+    <label class="check"><input type="checkbox" id="auto"> Enviar solas cuando cambien</label>
+  </fieldset>
+  <div class="row">
+    <button id="save" class="primary">Guardar</button>
+    <button id="test">Probar conexión</button>
+    <button id="now">Enviar ahora</button>
+  </div>
+  <p id="msg"></p>
+  <script src="options.js"></script>
+</body>
+</html>

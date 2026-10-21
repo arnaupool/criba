@@ -73,7 +73,10 @@ def _valid_session(value: str | None) -> bool:
 
 @app.middleware("http")
 async def auth(request: Request, call_next):
-    if not UI_PASSWORD or request.url.path in PUBLIC_PATHS or _valid_session(request.cookies.get(COOKIE)):
+    # /api/ext/ (salvo /token) usa el token de la extensión, que comprueba cada ruta
+    ext = request.url.path.startswith("/api/ext/") and request.url.path != "/api/ext/token"
+    if (not UI_PASSWORD or ext or request.url.path in PUBLIC_PATHS
+            or _valid_session(request.cookies.get(COOKIE))):
         resp = await call_next(request)
         if request.url.path.startswith("/static/"):
             # revalidar siempre: tras actualizar el contenedor no debe quedarse el JS/CSS viejo
@@ -518,6 +521,7 @@ async def settings():
         "version": config.VERSION, "commit": config.COMMIT,
         "browser_ua": db.get_setting("browser_ua", "") or "",
         "gdl_dev": db.get_setting("gdl_channel") == "dev",
+        "ext_token": ext_token(),
         "hours": dict(zip(("enabled", "start", "end"), worker.active_hours())),
         "cobalt": await cobalt.status(),
         "pauses": [{"site": r["key"].split(":", 1)[1], "until": r["value"]}
@@ -532,19 +536,115 @@ async def upload_cookies(site: str, file: UploadFile):
     if not site or "/" in site or "\\" in site or ".." in site:
         raise HTTPException(400, "Sitio no válido")
     content = await file.read()
-    text = content.decode("utf-8", "replace")
+    _save_cookies(site, content.decode("utf-8", "replace"))
+    return {"ok": True}
+
+
+def _save_cookies(site: str, text: str):
+    """Guarda un cookies.txt (de la web o de la extensión) y deja todo listo para usarlo."""
     if "\t" not in text:
         raise HTTPException(400, "No parece un cookies.txt en formato Netscape")
     if (need := SESSION_COOKIE.get(site)) and f"\t{need}\t" not in text:
         raise HTTPException(400, f"Falta la cookie de sesión «{need}»: exporta las cookies con la sesión iniciada "
                                  f"en {site}")
     (COOKIES / f"{site}.txt").write_text(text, encoding="utf-8")
+    db.set_setting(f"cookies_at:{site}", now())
     clear_cookies_bad(site)
     # gallery-dl guarda en caché la sesión anterior: con cookies nuevas puede seguir usándola y acabar
     # en «redirect to login page» (lo explica su autor; equivale a --clear-cache)
     shutil.rmtree(DATA / "cache" / "gallery-dl", ignore_errors=True)
     cobalt.restart()  # cobalt lee las cookies al arrancar
-    return {"ok": True}
+
+
+# ------------------------------------------------------------------ extensión del navegador
+# La extensión «Criba · cookies» manda las cookies de Instagram / X cuando cambian. Se identifica con un
+# token (Ajustes), no con la sesión de la web, así que estas rutas quedan fuera del inicio de sesión.
+
+EXT_SITES = {"instagram.com", "x.com"}
+EXT_CORS = {"Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "Content-Type, X-Criba-Token",
+            "Access-Control-Allow-Methods": "GET, POST, OPTIONS"}
+
+
+def ext_token(create: bool = False) -> str:
+    tok = db.get_setting("ext_token", "") or ""
+    if not tok and create:
+        tok = secrets.token_urlsafe(24)
+        db.set_setting("ext_token", tok)
+    return tok
+
+
+def _ext_check(request: Request):
+    tok = ext_token()
+    sent = request.headers.get("x-criba-token", "")
+    if not tok or not hmac.compare_digest(sent.encode(), tok.encode()):
+        raise HTTPException(401, "Token no válido (cópialo de Criba → Ajustes → Extensión)", headers=EXT_CORS)
+
+
+def _netscape(cookies: list[dict]) -> str:
+    lines = ["# Netscape HTTP Cookie File", "# Enviado por la extensión «Criba · cookies»"]
+    for c in cookies:
+        name, value = str(c.get("name", "")), str(c.get("value", ""))
+        if not name or "\t" in name + value or "\n" in name + value:
+            continue
+        host_only = bool(c.get("hostOnly"))
+        domain = str(c.get("domain", "")).strip()
+        if not host_only and not domain.startswith("."):
+            domain = "." + domain
+        prefix = "#HttpOnly_" if c.get("httpOnly") else ""
+        lines.append("\t".join([prefix + domain, "FALSE" if host_only else "TRUE", str(c.get("path") or "/"),
+                                "TRUE" if c.get("secure") else "FALSE", str(int(c.get("expirationDate") or 0)),
+                                name, value]))
+    return "\n".join(lines) + "\n"
+
+
+@app.options("/api/ext/{rest:path}")
+async def ext_preflight(rest: str):
+    return Response(status_code=204, headers=EXT_CORS)
+
+
+@app.get("/api/ext/ping")
+async def ext_ping(request: Request):
+    _ext_check(request)
+    return JSONResponse({"ok": True, "version": config.VERSION}, headers=EXT_CORS)
+
+
+@app.post("/api/ext/cookies")
+async def ext_cookies(request: Request):
+    _ext_check(request)
+    data = await request.json()
+    site = str(data.get("site", "")).lower()
+    if site not in EXT_SITES:
+        raise HTTPException(400, "Sitio no admitido", headers=EXT_CORS)
+    cookies = [c for c in data.get("cookies") or [] if str(c.get("domain", "")).lstrip(".").endswith(site)]
+    try:
+        _save_cookies(site, _netscape(cookies))
+    except HTTPException as e:
+        raise HTTPException(e.status_code, e.detail, headers=EXT_CORS)
+    if ua := " ".join(str(data.get("user_agent") or "").split())[:400]:
+        db.set_setting("browser_ua", ua)  # mismo navegador que las cookies
+    return JSONResponse({"ok": True, "count": len(cookies)}, headers=EXT_CORS)
+
+
+@app.post("/api/ext/token")
+async def ext_new_token():
+    """Genera (o regenera) el token de la extensión. Este sí exige la sesión de la web."""
+    db.set_setting("ext_token", "")
+    return {"token": ext_token(create=True)}
+
+
+@app.get("/extension.zip")
+async def extension_zip():
+    """La extensión empaquetada, lista para cargar en Chrome/Edge/Brave o firmar para Firefox."""
+    import io
+    import zipfile
+    buf = io.BytesIO()
+    src = Path(__file__).parent.parent / "extension"
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for p in sorted(src.rglob("*")):
+            if p.is_file():
+                z.write(p, p.relative_to(src).as_posix())
+    return Response(buf.getvalue(), media_type="application/zip",
+                    headers={"Content-Disposition": 'attachment; filename="criba-cookies.zip"'})
 
 
 @app.post("/api/settings/hours")

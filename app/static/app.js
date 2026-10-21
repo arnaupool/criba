@@ -959,6 +959,29 @@ async function loadSettings() {
         <button class="btn small primary" id="ua-save">Guardar</button></div>
     </div>
 
+    <div class="card"><h2>Extensión del navegador</h2>
+      <p class="hint" style="margin-top:0">La extensión «Criba · cookies» manda solas las cookies de Instagram y X cuando cambian
+      (por ejemplo, al volver a iniciar sesión), y también el User-Agent. Instálala solo en el perfil del navegador
+      donde tengas la cuenta secundaria.</p>
+      <div class="row"><input id="ext-token" readonly value="${esc(s.ext_token)}" placeholder="sin token todavía"></div>
+      <div class="row" style="margin-top:8px">
+        <button class="btn small" id="ext-copy" ${s.ext_token ? "" : "disabled"}>Copiar token</button>
+        <button class="btn small" id="ext-new">${s.ext_token ? "Generar otro (invalida el anterior)" : "Generar token"}</button>
+        <a class="btn small primary" href="/extension.zip">⬇️ Descargar extensión</a>
+      </div>
+      <details style="margin-top:10px"><summary class="small">Cómo instalarla</summary>
+        <p class="small"><b>Chrome, Edge o Brave:</b> descomprime el .zip, abre <code>chrome://extensions</code>, activa el
+        «Modo de desarrollador» y pulsa «Cargar descomprimida» eligiendo la carpeta.</p>
+        <p class="small"><b>Firefox:</b> para probarla, <code>about:debugging</code> → «Este Firefox» → «Cargar complemento
+        temporal» y elige <code>manifest.json</code> (se quita al cerrar Firefox). Para dejarla puesta hay que firmarla gratis:
+        en <a href="https://addons.mozilla.org/developers/" target="_blank" rel="noopener">addons.mozilla.org/developers</a>
+        → «Enviar un nuevo complemento» → «En tu propio sitio» y sube el .zip; te devuelve un .xpi firmado que instalas
+        arrastrándolo a Firefox.</p>
+        <p class="small">En la extensión, pon la dirección de Criba (${esc(s.public_url || location.origin)}) y el token, pulsa
+        Guardar y acepta el permiso.</p>
+      </details>
+    </div>
+
     <div class="card"><h2>Horario de comprobaciones</h2>
       <p class="hint" style="margin-top:0">Los seguimientos solo se comprueban en esta franja, como lo haría una persona (ayuda a que
       Instagram no marque la cuenta). Con un hueco de menos de 24 h no se pierde ninguna historia.</p>
@@ -1000,6 +1023,14 @@ async function loadSettings() {
   $$("#cookie-rows [data-delcookie]").forEach(b => b.onclick = async () => {
     try { await api(`/api/cookies/${b.closest(".cookie-row").dataset.site}`, { method: "DELETE" }); loadSettings(); } catch (e) { fail(e); }
   });
+  $("#ext-copy").onclick = async () => {
+    try { await navigator.clipboard.writeText($("#ext-token").value); toast("✓ Token copiado"); }
+    catch (e) { $("#ext-token").select(); toast("Selecciónalo y cópialo a mano"); }
+  };
+  $("#ext-new").onclick = async () => {
+    if ($("#ext-token").value && !confirm("¿Generar otro token? La extensión dejará de funcionar hasta que le pongas el nuevo.")) return;
+    try { await api("/api/ext/token", { method: "POST" }); loadSettings(); } catch (e) { fail(e); }
+  };
   $("#hours-save").onclick = async () => {
     const body = { enabled: $("#hours-on").checked, start: +$("#hours-start").value, end: +$("#hours-end").value };
     try { await api("/api/settings/hours", { method: "POST", json: body }); toast("✓ Horario guardado"); }
