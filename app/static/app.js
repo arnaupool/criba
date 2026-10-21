@@ -965,6 +965,10 @@ async function loadSettings() {
       <label class="radio" style="margin-bottom:6px"><input type="checkbox" id="gdl-dev" ${s.gdl_dev ? "checked" : ""}>
         gallery-dl en desarrollo: trae antes los arreglos cuando Instagram cambia algo (puede ser menos estable)</label>
       <p id="versions" class="muted">${esc(s.versions || "")}</p>
+      <p class="small">cobalt (reserva para enlaces cuando fallan los demás):
+        ${!s.cobalt.available ? '<span class="muted">no incluido</span>'
+          : s.cobalt.ok ? `<span class="ok">✓ activo</span> · ${esc(s.cobalt.version || "")}${s.cobalt.external ? " (instancia externa)" : ""}`
+          : `<span class="bad">no responde</span> <span class="muted">${esc(s.cobalt.error || "")}</span>`}</p>
       <button class="btn" id="btn-update">⬆️ Actualizar ahora</button> <button class="btn ghost" id="btn-versions">Ver versiones</button>
       <pre class="out hidden" id="update-out"></pre>
     </div>

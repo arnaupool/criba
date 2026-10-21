@@ -14,6 +14,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 
+from . import cobalt
 from .config import ARCHIVES, COOKIES, DEVICE, DEVICE_HOURS, INBOX, PYUPD, TMP, kind_of
 from .db import db, now
 from .library import clean_name, unique_path
@@ -291,9 +292,11 @@ def _media_files(folder: Path) -> list[Path]:
 
 
 async def download_link(url: str, dest: Path) -> tuple[int, str]:
-    """gallery-dl primero (redes sociales, galerías, enlaces directos), luego yt-dlp, luego extractor genérico."""
-    if reason := blocked_reason(url):  # no insistir: sesión rechazada o pausa por 429
-        return 1, "[error] " + reason
+    """gallery-dl primero (redes sociales, galerías, enlaces directos), luego yt-dlp, luego cobalt y al final
+    el extractor genérico de gallery-dl."""
+    if reason := blocked_reason(url):  # sesión rechazada o pausa por 429: solo cobalt (una petición)
+        ok, clog = await cobalt.download(url, dest)
+        return (0, f"{reason}\n$ cobalt\n{clog}") if ok else (1, f"[error] {reason}\n$ cobalt\n{clog}")
     code, out = await _run(_gdl_args(url, dest) + [url], LINK_TIMEOUT)
     logs = [f"$ gallery-dl\n{out}"]
     if _media_files(dest):
@@ -307,6 +310,11 @@ async def download_link(url: str, dest: Path) -> tuple[int, str]:
     logs.append(f"$ yt-dlp\n{out}")
     if _media_files(dest):
         return code, "\n".join(logs)
+    if cobalt.base_url():
+        ok, clog = await cobalt.download(url, dest)
+        logs.append(f"$ cobalt\n{clog}")
+        if ok and _media_files(dest):
+            return 0, "\n".join(logs)
     code, out = await _run(_gdl_args(url, dest) + ["-o", "extractor.generic.enabled=true", url], LINK_TIMEOUT)
     logs.append(f"$ gallery-dl (genérico)\n{out}")
     return code, "\n".join(logs)

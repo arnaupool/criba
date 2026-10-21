@@ -13,7 +13,7 @@ from fastapi import Body, FastAPI, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import bot, config, frames, library, tgreview, worker
+from . import bot, cobalt, config, frames, library, tgreview, worker
 from .config import COOKIES, DATA, LIBRARY, UI_PASSWORD
 from .db import db, now
 from .downloader import (COOKIE_FILE, IG_DEFAULT, IG_PARTS, VERBOSE_ORIGIN, clear_cookies_bad, clear_ratelimit,
@@ -36,7 +36,9 @@ async def lifespan(_app: FastAPI):
              asyncio.create_task(worker.worker("device")),
              asyncio.create_task(worker.scheduler())]
     await bot.start()
+    await cobalt.start()
     yield
+    await cobalt.stop()
     await bot.stop()
     for t in tasks:
         t.cancel()
@@ -515,6 +517,7 @@ async def settings():
         "version": config.VERSION, "commit": config.COMMIT,
         "browser_ua": db.get_setting("browser_ua", "") or "",
         "gdl_dev": db.get_setting("gdl_channel") == "dev",
+        "cobalt": await cobalt.status(),
         "pauses": [{"site": r["key"].split(":", 1)[1], "until": r["value"]}
                    for r in db.q("SELECT key, value FROM settings WHERE key LIKE 'ratelimit:%' AND value > ?",
                                  (now(),))],
@@ -538,6 +541,7 @@ async def upload_cookies(site: str, file: UploadFile):
     # gallery-dl guarda en caché la sesión anterior: con cookies nuevas puede seguir usándola y acabar
     # en «redirect to login page» (lo explica su autor; equivale a --clear-cache)
     shutil.rmtree(DATA / "cache" / "gallery-dl", ignore_errors=True)
+    cobalt.restart()  # cobalt lee las cookies al arrancar
     return {"ok": True}
 
 
@@ -571,6 +575,7 @@ async def delete_cookies(site: str):
         raise HTTPException(400, "Sitio no válido")
     p.unlink(missing_ok=True)
     clear_cookies_bad(site)
+    cobalt.restart()
     return {"ok": True}
 
 

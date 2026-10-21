@@ -10,7 +10,9 @@ Entran a la cola por tres caminos:
 - **Web**: pegas enlaces con el botón ＋ o usas el marcador «Enviar a Criba» del navegador.
 
 Por debajo usa [gallery-dl](https://github.com/mikf/gallery-dl) y [yt-dlp](https://github.com/yt-dlp/yt-dlp), que se
-actualizan solos en cada arranque.
+actualizan solos en cada arranque. Para enlaces sueltos que esos dos no consiguen bajar, la imagen incluye
+[cobalt](https://github.com/imputnet/cobalt) (AGPL-3.0, sin modificar), que Criba arranca dentro del mismo contenedor
+solo en `localhost`. Con la variable `COBALT_URL` (y `COBALT_API_KEY` si hace falta) se usa otra instancia.
 
 ## Instalación en Unraid
 
