@@ -424,6 +424,8 @@ async def retry(jid: int, verbose: bool = False):
         return {"job": worker.enqueue_sub(j["subscription_id"], origin)}
     if j["kind"] == "device":
         return {"job": worker.enqueue_device(j["url"])}
+    if j["kind"] == "tray":
+        return {"job": worker.enqueue_tray(origin)}
     return {"job": worker.enqueue_link(j["url"], origin)}
 
 
@@ -436,7 +438,15 @@ async def subs():
     for r in rows:
         r["parts_effective"] = sub_parts(r)
     return {"subs": rows, "ig_parts": IG_PARTS, "ig_default": IG_DEFAULT,
-            "hours": dict(zip(("enabled", "start", "end"), worker.active_hours()))}
+            "hours": dict(zip(("enabled", "start", "end"), worker.active_hours())),
+            "tray": {"count": len(worker.tray_subs()), "last": db.get_setting("tray_last"),
+                     "next": db.get_setting("tray_next")}}
+
+
+@app.post("/api/tray/check")
+async def tray_check():
+    """Revisar ya la bandeja de historias de Instagram."""
+    return {"job": worker.enqueue_tray("web")}
 
 
 @app.post("/api/subs")

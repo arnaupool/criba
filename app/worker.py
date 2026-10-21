@@ -11,7 +11,9 @@ from .downloader import (COOKIES_BAD_MSG, RATE_PAUSE_H, JobCancelled, blocked_re
                          cookie_name, cookies_for, current_job, device_dir, download_link, download_subscription,
                          forget_cancel, ingest, job_tmp, last_error_line, login_problem, mark_cookies_bad,
                          mark_ratelimited, prepare_device_files, purge_device, rate_problem, site_of, tail,
-                         TRANSIENT_ALERT, transient_problem, VERBOSE_ORIGIN, verbose_job)
+                         TRANSIENT_ALERT, transient_problem, VERBOSE_ORIGIN, verbose_job, ig_follows, ig_tray,
+                         ig_username, tray_covers, _gdl_args, _run)
+from .config import ARCHIVES
 from .library import purge_trash
 
 log = logging.getLogger("criba.worker")
@@ -40,12 +42,47 @@ def enqueue_sub(sub_id: int, origin: str = "scheduler") -> int | None:
         return None
     jid = db.x("INSERT INTO jobs(kind,url,subscription_id,origin,created_at) VALUES('sub',?,?,?,?)",
                (sub["url"], sub_id, origin, now()))
+    if sub["site"] == "instagram":
+        _take_ig_slot()
     _wake["sub"].set()
     return jid
 
 
-def _claim(kind: str) -> dict | None:
-    job = db.one("SELECT * FROM jobs WHERE status='queued' AND kind=? ORDER BY id LIMIT 1", (kind,))
+# ---- Instagram: comprobaciones repartidas y bandeja de historias
+IG_GAP_MIN = (20, 30)        # minutos entre dos consultas automáticas a Instagram (al azar en ese rango)
+TRAY_EVERY_MIN = (210, 270)  # bandeja de historias cada ~4 h (duran 24 h)
+FOLLOW_RECHECK_DAYS = 7
+
+
+def _take_ig_slot():
+    nxt = datetime.now(timezone.utc) + timedelta(minutes=random.uniform(*IG_GAP_MIN))
+    db.set_setting("ig_slot", nxt.isoformat(timespec="seconds"))
+
+
+def _ig_slot_free() -> bool:
+    return (db.get_setting("ig_slot") or "") <= now() and not db.one(
+        "SELECT j.id FROM jobs j LEFT JOIN subscriptions s ON s.id=j.subscription_id WHERE j.status IN "
+        "('queued','running') AND (j.kind='tray' OR (j.kind='sub' AND s.site='instagram'))")
+
+
+def tray_subs() -> list[dict]:
+    return [s for s in db.q("SELECT * FROM subscriptions WHERE enabled=1 AND site='instagram' AND baseline_done=1")
+            if tray_covers(s)]
+
+
+def enqueue_tray(origin: str = "scheduler") -> int | None:
+    if db.one("SELECT id FROM jobs WHERE kind='tray' AND status IN ('queued','running')"):
+        return None
+    jid = db.x("INSERT INTO jobs(kind,url,origin,created_at) VALUES('tray',?,?,?)",
+               ("https://www.instagram.com/stories/me/", origin, now()))
+    _take_ig_slot()
+    _wake["sub"].set()
+    return jid
+
+
+def _claim(kinds: tuple[str, ...]) -> dict | None:
+    marks = ",".join("?" * len(kinds))
+    job = db.one(f"SELECT * FROM jobs WHERE status='queued' AND kind IN ({marks}) ORDER BY id LIMIT 1", kinds)
     if job and db.x("UPDATE jobs SET status='running', started_at=? WHERE id=? AND status='queued'",
                     (now(), job["id"])):
         return job
@@ -148,6 +185,8 @@ async def _process_sub(job: dict):
             last_error=?, errors_in_row = CASE WHEN ? THEN errors_in_row+1 ELSE 0 END WHERE id=?""",
          (now(), nxt.isoformat(timespec="seconds"), len(ids), len(ids), failed, failed, parts_done,
           last_error_line(out) if failed and not transient else None, failed, sub["id"]))
+    if not failed:
+        await _check_follow(sub)
     # la nota va delante del registro ya recortado para que no se pierda
     log_text = f"{note}\n\n{tail(out)}" if note else tail(out)
     db.x("UPDATE jobs SET status=?, finished_at=?, new_items=?, dup_items=?, log=?, note=? WHERE id=?",
@@ -169,6 +208,65 @@ async def _process_sub(job: dict):
                           path="#seguimientos")
 
 
+async def _process_tray(job: dict):
+    """Bandeja de historias: una petición dice qué perfiles seguidos tienen historias nuevas y solo se
+    descargan las de esos (con el enlace por ID que trae la bandeja: no hay que buscar al usuario)."""
+    nxt = datetime.now(timezone.utc) + timedelta(minutes=random.uniform(*TRAY_EVERY_MIN))
+    db.set_setting("tray_next", nxt.isoformat(timespec="seconds"))
+    db.set_setting("tray_last", now())
+    url = "https://www.instagram.com/stories/me/"
+    if reason := blocked_reason(url):
+        db.x("UPDATE jobs SET status='error', finished_at=?, log=? WHERE id=?", (now(), reason, job["id"]))
+        return
+    tray, out = await ig_tray()
+    logs, total, failed = [out], 0, not tray and out.startswith("[error]")
+    if failed:
+        await _check_login(url, out)
+    for sub in tray_subs():
+        entry = tray.get(ig_username(sub["url"]))
+        if not entry or entry[1] <= (sub["stories_seen"] or 0):
+            continue
+        story_url, latest = entry
+        tmp = job_tmp(f"{job['id']}_{sub['id']}")
+        try:
+            args = _gdl_args(story_url, tmp) + ["--download-archive", str(ARCHIVES / f"sub_{sub['id']}.sqlite")]
+            code, sout = await _run(args + [story_url])
+            stats: dict = {}
+            ids, dups = await asyncio.to_thread(ingest, tmp, "sub", sub["url"], job["id"], sub,
+                                                {"author": sub["name"]}, sub["created_at"], stats)
+        finally:
+            cleanup_tmp(tmp)
+        logs.append(f"$ historias de {sub['name']}: {len(ids)} nuevas\n{sout}")
+        if code == 0 or ids:
+            db.x("UPDATE subscriptions SET stories_seen=?, total=total+?, last_new=? WHERE id=?",
+                 (latest, len(ids), len(ids), sub["id"]))
+        total += len(ids)
+        if ids and notify.bot:
+            from .bot import notify_new_items  # import tardío para evitar ciclos
+            await notify_new_items(sub, ids)
+    db.x("UPDATE jobs SET status=?, finished_at=?, new_items=?, log=?, note=? WHERE id=?",
+         ("error" if failed else "done", now(), total, tail("\n".join(logs)),
+          None if failed else f"{len(tray)} perfiles con historias en la bandeja; {total} nuevas", job["id"]))
+
+
+async def _check_follow(sub: dict):
+    """Instagram: ¿la cuenta de las cookies sigue el perfil? Si no, sus historias no salen en la bandeja
+    y se miran perfil a perfil; se avisa una vez. Se vuelve a comprobar cada FOLLOW_RECHECK_DAYS días."""
+    if sub["site"] != "instagram" or not cookies_for(sub["url"]) or blocked_reason(sub["url"]):
+        return
+    checked = sub.get("follows_checked") or ""
+    if checked and checked > (datetime.now(timezone.utc) - timedelta(days=FOLLOW_RECHECK_DAYS)).isoformat():
+        return
+    follows, _ = await ig_follows(sub)
+    if follows is None:
+        return
+    db.x("UPDATE subscriptions SET ig_follows=?, follows_checked=? WHERE id=?", (int(follows), now(), sub["id"]))
+    if not follows and sub.get("ig_follows") != 0:
+        await notify.send(f"👤 La cuenta de las cookies no sigue a {sub['name']}. Sus historias se mirarán perfil a "
+                          "perfil (más peticiones a Instagram). Si la sigues desde esa cuenta, se mirarán en la "
+                          "bandeja junto con las demás.", path="#seguimientos")
+
+
 async def _process_device(job: dict):
     tmp = job_tmp(job["id"])
     try:
@@ -182,10 +280,15 @@ async def _process_device(job: dict):
          ("done" if n else "error", now(), tail(out), note, job["id"]))
 
 
+HANDLERS = {"link": "_process_link", "sub": "_process_sub", "device": "_process_device", "tray": "_process_tray"}
+
+
 async def worker(kind: str):
-    handler = {"link": _process_link, "sub": _process_sub, "device": _process_device}[kind]
+    # la bandeja de historias va por la misma cola que los seguimientos: así Instagram nunca recibe dos a la vez
+    kinds = ("sub", "tray") if kind == "sub" else (kind,)
     while True:
-        job = _claim(kind)
+        job = _claim(kinds)
+        handler = globals()[HANDLERS[job["kind"]]] if job else None
         if not job:
             _wake[kind].clear()
             try:
@@ -259,16 +362,31 @@ def in_active_hours(hour: int | None = None) -> bool:
     return start <= h < end if start < end else (h >= start or h < end)  # p. ej. 22–6 cruza la medianoche
 
 
+def schedule_due():
+    """Encola lo que toca. Fuera de horario no se lanza nada (lo pendiente sale al abrir la franja;
+    «Comprobar ahora» va siempre)."""
+    if not in_active_hours():
+        return
+    due = db.q("SELECT id, site FROM subscriptions WHERE enabled=1 AND "
+               "(next_check IS NULL OR next_check<=?) ORDER BY next_check", (now(),))
+    for s in due:
+        if s["site"] != "instagram":
+            enqueue_sub(s["id"])
+    # Instagram: de una en una y con 20–30 min entre consultas; la bandeja primero (las historias caducan)
+    if _ig_slot_free():
+        if (tray_subs() and (db.get_setting("tray_next") or "") <= now()
+                and not blocked_reason("https://www.instagram.com/")):
+            enqueue_tray()
+        elif ig := next((s for s in due if s["site"] == "instagram"), None):
+            enqueue_sub(ig["id"])
+
+
 async def scheduler():
     last_purge = 0.0
     loop = asyncio.get_running_loop()
     while True:
         try:
-            # fuera de horario no se lanza nada (lo pendiente sale al abrir la franja; «Comprobar ahora» sí va)
-            subs = db.q("SELECT id FROM subscriptions WHERE enabled=1 AND (next_check IS NULL OR next_check<=?)",
-                        (now(),)) if in_active_hours() else []
-            for sub in subs:
-                enqueue_sub(sub["id"])
+            schedule_due()
             await asyncio.to_thread(purge_device)
             if loop.time() - last_purge > 3600:
                 last_purge = loop.time()

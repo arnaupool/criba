@@ -114,6 +114,12 @@ class DB:
         if "from_item" not in cols:  # imagen sacada de un vídeo («Solo imagen»): id del vídeo
             self.conn.execute("ALTER TABLE items ADD COLUMN from_item INTEGER")
         cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(subscriptions)")}
+        if "ig_follows" not in cols:
+            # Instagram: si la cuenta de las cookies sigue el perfil (sus historias salen en la bandeja),
+            # cuándo se comprobó y hora (epoch) de la última historia vista en la bandeja
+            self.conn.execute("ALTER TABLE subscriptions ADD COLUMN ig_follows INTEGER")
+            self.conn.execute("ALTER TABLE subscriptions ADD COLUMN follows_checked TEXT")
+            self.conn.execute("ALTER TABLE subscriptions ADD COLUMN stories_seen INTEGER")
         if "parts" not in cols:
             # parts: qué secciones del perfil se miran (Instagram); NULL = las de por defecto.
             # parts_done: secciones cuyo contenido ya existente se ha marcado como visto.

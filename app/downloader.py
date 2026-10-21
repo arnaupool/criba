@@ -345,6 +345,70 @@ def sub_parts(sub: dict) -> list[str]:
     return parts or list(IG_DEFAULT)
 
 
+def ig_username(url: str) -> str:
+    parts = [p for p in urlparse(url).path.split("/") if p]
+    return parts[0].lower() if parts else ""
+
+
+def tray_covers(sub: dict) -> bool:
+    """Sus historias se miran en la bandeja: Instagram, con cookies y la cuenta sigue el perfil."""
+    return (sub["site"] == "instagram" and bool(cookies_for(sub["url"])) and sub.get("ig_follows") == 1
+            and "stories" in sub_parts(sub))
+
+
+async def _run_json(args: list[str], timeout: int = STEP_TIMEOUT) -> tuple[int, object, str]:
+    """gallery-dl -j: devuelve (código, JSON de stdout, stderr). Sin registro en directo."""
+    proc = await asyncio.create_subprocess_exec(*args, stdout=asyncio.subprocess.PIPE,
+                                                stderr=asyncio.subprocess.PIPE, env=_env())
+    try:
+        out, err = await asyncio.wait_for(proc.communicate(), timeout)
+    except asyncio.TimeoutError:
+        proc.kill()
+        return -1, None, "Tiempo de espera agotado"
+    try:
+        data = json.loads(out.decode("utf-8", "replace") or "null")
+    except ValueError:
+        data = None
+    return proc.returncode, data, err.decode("utf-8", "replace")
+
+
+def _kwdicts(messages) -> list[tuple[str | None, dict]]:
+    """Mensajes de gallery-dl -j ([tipo, url?, datos]) → [(url, datos)]."""
+    out = []
+    for m in messages if isinstance(messages, list) else []:
+        if isinstance(m, list) and m and isinstance(m[-1], dict):
+            out.append((m[1] if len(m) > 2 and isinstance(m[1], str) else None, m[-1]))
+    return out
+
+
+async def ig_follows(sub: dict) -> tuple[bool | None, str]:
+    """¿La cuenta de las cookies sigue el perfil? (None si no se ha podido saber). Una petición."""
+    url = f"https://www.instagram.com/{ig_username(sub['url'])}/info/"
+    code, data, err = await _run_json(_gdl_args(url, TMP) + ["-j", url], timeout=600)
+    for _, user in _kwdicts(data):
+        fs = user.get("friendship_status") or {}
+        if "following" in fs or "followed_by_viewer" in user:
+            return bool(fs.get("following") or user.get("followed_by_viewer")), err
+    return None, err
+
+
+async def ig_tray() -> tuple[dict, str]:
+    """Bandeja de historias de la cuenta de las cookies: una petición para todos los perfiles que sigue.
+    Devuelve ({usuario: (url de sus historias, epoch de la última)}, registro)."""
+    url = "https://www.instagram.com/stories/me/"
+    code, data, err = await _run_json(_gdl_args(url, TMP) + ["-j", url], timeout=600)
+    tray = {}
+    for qurl, d in _kwdicts(data):
+        user = (d.get("user") or {}).get("username") or d.get("username")
+        latest = d.get("latest_reel_media")
+        if user and qurl and latest:
+            tray[user.lower()] = (qurl, int(latest))
+    log_text = f"$ bandeja de historias: {len(tray)} perfiles con historias\n{err}"
+    if code != 0 and not tray:
+        log_text = f"[error] bandeja de historias (código {code})\n{err}"
+    return tray, log_text
+
+
 def _labels(parts) -> str:
     return ", ".join(IG_PARTS[p] for p in IG_PARTS if p in parts)
 
@@ -364,6 +428,10 @@ async def download_subscription(sub: dict, dest: Path) -> tuple[int, str, str, s
         notes.append(f"Sin cookies de Instagram: se saltan {_labels(skipped)}")
     if sub_parts(sub) and not parts:
         return 1, "No hay nada que mirar sin cookies", "; ".join(notes), sub.get("parts_done")
+    if sub["baseline_done"] and "stories" in parts and tray_covers(sub):
+        parts = [p for p in parts if p != "stories"]  # van por la bandeja de historias (una petición para todos)
+        if not parts:
+            return 0, "Solo historias: van por la bandeja", "", sub.get("parts_done")
     include = ["-o", f"include={','.join(parts)}"] if parts else []
 
     async def mark_seen(which: list[str] | None, upto: int = BASELINE_SCAN) -> int:

@@ -111,6 +111,7 @@ async function loadSubsData() {
   S.igParts = d.ig_parts;
   S.igDefault = d.ig_default;
   S.hours = d.hours;
+  S.tray = d.tray;
 }
 
 function renderChips() {
@@ -755,7 +756,12 @@ async function loadSubs() {
   const h = S.hours || {};
   const hoursNote = h.enabled && h.start !== h.end
     ? `<p class="hint">⏰ Las comprobaciones automáticas solo se hacen entre las ${h.start}:00 y las ${h.end}:00 (Ajustes). «Comprobar ahora» funciona siempre.</p>` : "";
-  el.innerHTML = hoursNote + `<div class="list">${S.subs.map(s => {
+  const t = S.tray || {};
+  const trayNote = t.count ? `<div class="card row end" style="margin-bottom:10px">
+      <span class="small">📚 Historias de ${t.count} perfil${t.count !== 1 ? "es" : ""} por la <b>bandeja</b> (una sola consulta):
+      última ${ago(t.last)}${t.next ? ` · próxima ${ago(t.next)}` : ""}</span>
+      <button class="btn small" id="tray-now">Revisar bandeja ahora</button></div>` : "";
+  el.innerHTML = hoursNote + trayNote + `<div class="list">${S.subs.map(s => {
     const initial = s.initial_count === 0 ? "solo lo nuevo" : s.initial_count < 0 ? "todo el histórico" : `últimos ${s.initial_count}`;
     let stat;
     if (!s.baseline_done && !s.last_check) stat = `Preparando (${initial})…`;
@@ -768,6 +774,8 @@ async function loadSubs() {
           ${s.enabled ? "" : '<span class="site">en pausa</span>'}</div>
         <div class="url"><a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.url)}</a></div>
         <div class="stat">${stat}</div>
+        ${s.site === "instagram" && s.ig_follows === 1 ? '<div class="stat">📚 Sus historias van por la bandeja</div>' : ""}
+        ${s.site === "instagram" && s.ig_follows === 0 ? '<div class="stat"><span class="err">👤 Tu cuenta no lo sigue:</span> sus historias se miran perfil a perfil</div>' : ""}
         ${s.site === "instagram" ? `<div class="checks ig-sub">${igChecks(s.parts_effective, `data-igsub="${s.id}"`)}</div>` : ""}
         <div class="stat">Cada ${fmtInterval(s.interval_min)} · próxima ${s.enabled ? ago(s.next_check) : "—"} · 📁 ${esc(s.folder || "sin carpeta sugerida")}</div>
       </div>
@@ -788,6 +796,11 @@ async function loadSubs() {
 }
 
 $("#subs").addEventListener("click", async e => {
+  if (e.target.id === "tray-now") {
+    try { const r = await api("/api/tray/check", { method: "POST" }); toast(r.job ? "📚 Revisando la bandeja" : "Ya se está revisando"); }
+    catch (err) { fail(err); }
+    return;
+  }
   const rv = e.target.closest("[data-review]");
   if (rv) { S.sub = +rv.dataset.review; S.source = null; S.status = "pending"; return; }
   const b = e.target.closest("button[data-act]");
@@ -849,7 +862,7 @@ async function loadJobs() {
   const scroll = Object.fromEntries($$("#jobs pre:not(.hidden)").map(p =>
     [p.dataset.id, p.scrollTop + p.clientHeight >= p.scrollHeight - 8 ? "end" : p.scrollTop]));
   $("#jobs").innerHTML = d.jobs.length ? `<div class="list">${d.jobs.map(j => {
-    const what = j.kind === "sub" ? `👀 ${esc(j.sub_name || "seguimiento borrado")}`
+    const what = j.kind === "tray" ? "📚 Bandeja de historias de Instagram" : j.kind === "sub" ? `👀 ${esc(j.sub_name || "seguimiento borrado")}`
       : `${j.kind === "device" ? "📱 " : ""}<a href="${esc(j.url)}" target="_blank" rel="noopener">${esc(j.url)}</a>`;
     let res = "";
     if (j.status === "done") res = j.note && !j.new_items ? esc(j.note)
