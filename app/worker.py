@@ -244,13 +244,30 @@ def cancel(job_id: int) -> str | None:
     return "cancelling"
 
 
+def active_hours() -> tuple[bool, int, int]:
+    """Franja en la que el planificador lanza comprobaciones (hora local del contenedor, TZ).
+    Por defecto de 9 a 23 h, como lo usaría una persona."""
+    enabled = db.get_setting("hours_enabled", "1") == "1"
+    return enabled, int(db.get_setting("hours_from", "9")), int(db.get_setting("hours_to", "23"))
+
+
+def in_active_hours(hour: int | None = None) -> bool:
+    enabled, start, end = active_hours()
+    if not enabled or start == end:
+        return True
+    h = datetime.now().astimezone().hour if hour is None else hour
+    return start <= h < end if start < end else (h >= start or h < end)  # p. ej. 22–6 cruza la medianoche
+
+
 async def scheduler():
     last_purge = 0.0
     loop = asyncio.get_running_loop()
     while True:
         try:
-            for sub in db.q("SELECT id FROM subscriptions WHERE enabled=1 AND (next_check IS NULL OR next_check<=?)",
-                            (now(),)):
+            # fuera de horario no se lanza nada (lo pendiente sale al abrir la franja; «Comprobar ahora» sí va)
+            subs = db.q("SELECT id FROM subscriptions WHERE enabled=1 AND (next_check IS NULL OR next_check<=?)",
+                        (now(),)) if in_active_hours() else []
+            for sub in subs:
                 enqueue_sub(sub["id"])
             await asyncio.to_thread(purge_device)
             if loop.time() - last_purge > 3600:

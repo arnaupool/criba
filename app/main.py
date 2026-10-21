@@ -432,7 +432,8 @@ async def subs():
                 "i.status='pending') pending FROM subscriptions s ORDER BY s.name COLLATE NOCASE")
     for r in rows:
         r["parts_effective"] = sub_parts(r)
-    return {"subs": rows, "ig_parts": IG_PARTS, "ig_default": IG_DEFAULT}
+    return {"subs": rows, "ig_parts": IG_PARTS, "ig_default": IG_DEFAULT,
+            "hours": dict(zip(("enabled", "start", "end"), worker.active_hours()))}
 
 
 @app.post("/api/subs")
@@ -517,6 +518,7 @@ async def settings():
         "version": config.VERSION, "commit": config.COMMIT,
         "browser_ua": db.get_setting("browser_ua", "") or "",
         "gdl_dev": db.get_setting("gdl_channel") == "dev",
+        "hours": dict(zip(("enabled", "start", "end"), worker.active_hours())),
         "cobalt": await cobalt.status(),
         "pauses": [{"site": r["key"].split(":", 1)[1], "until": r["value"]}
                    for r in db.q("SELECT key, value FROM settings WHERE key LIKE 'ratelimit:%' AND value > ?",
@@ -543,6 +545,16 @@ async def upload_cookies(site: str, file: UploadFile):
     shutil.rmtree(DATA / "cache" / "gallery-dl", ignore_errors=True)
     cobalt.restart()  # cobalt lee las cookies al arrancar
     return {"ok": True}
+
+
+@app.post("/api/settings/hours")
+async def set_hours(enabled: bool = Body(True), start: int = Body(9), end: int = Body(23)):
+    if not (0 <= start <= 23 and 0 <= end <= 24):
+        raise HTTPException(400, "Horas no válidas")
+    db.set_setting("hours_enabled", "1" if enabled else "0")
+    db.set_setting("hours_from", str(start))
+    db.set_setting("hours_to", str(end))
+    return {"enabled": enabled, "start": start, "end": end}
 
 
 @app.post("/api/settings/gdl_channel")

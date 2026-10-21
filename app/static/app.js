@@ -110,6 +110,7 @@ async function loadSubsData() {
   S.subs = d.subs;
   S.igParts = d.ig_parts;
   S.igDefault = d.ig_default;
+  S.hours = d.hours;
 }
 
 function renderChips() {
@@ -751,7 +752,10 @@ async function loadSubs() {
   try { await loadSubsData(); } catch (e) { return fail(e); }
   const el = $("#subs");
   if (!S.subs.length) { el.innerHTML = `<p class="muted">Todavía no sigues a nadie.</p>`; return; }
-  el.innerHTML = `<div class="list">${S.subs.map(s => {
+  const h = S.hours || {};
+  const hoursNote = h.enabled && h.start !== h.end
+    ? `<p class="hint">⏰ Las comprobaciones automáticas solo se hacen entre las ${h.start}:00 y las ${h.end}:00 (Ajustes). «Comprobar ahora» funciona siempre.</p>` : "";
+  el.innerHTML = hoursNote + `<div class="list">${S.subs.map(s => {
     const initial = s.initial_count === 0 ? "solo lo nuevo" : s.initial_count < 0 ? "todo el histórico" : `últimos ${s.initial_count}`;
     let stat;
     if (!s.baseline_done && !s.last_check) stat = `Preparando (${initial})…`;
@@ -955,6 +959,15 @@ async function loadSettings() {
         <button class="btn small primary" id="ua-save">Guardar</button></div>
     </div>
 
+    <div class="card"><h2>Horario de comprobaciones</h2>
+      <p class="hint" style="margin-top:0">Los seguimientos solo se comprueban en esta franja, como lo haría una persona (ayuda a que
+      Instagram no marque la cuenta). Con un hueco de menos de 24 h no se pierde ninguna historia.</p>
+      <label class="radio"><input type="checkbox" id="hours-on" ${s.hours.enabled ? "checked" : ""}> Solo entre las
+        <input type="number" id="hours-start" min="0" max="23" value="${s.hours.start}" class="tiny"> y las
+        <input type="number" id="hours-end" min="0" max="24" value="${s.hours.end}" class="tiny"> h</label>
+      <button class="btn small primary" id="hours-save" style="margin-top:8px">Guardar</button>
+    </div>
+
     <div class="card"><h2>Marcador «Enviar a Criba»</h2>
       <p class="hint" style="margin-top:0">Arrástralo a la barra de marcadores. Al pulsarlo en cualquier página, envía esa dirección a la cola de descarga.</p>
       <a class="bookmarklet" href="${esc(bm)}" onclick="event.preventDefault()">➕ Enviar a Criba</a>
@@ -987,6 +1000,11 @@ async function loadSettings() {
   $$("#cookie-rows [data-delcookie]").forEach(b => b.onclick = async () => {
     try { await api(`/api/cookies/${b.closest(".cookie-row").dataset.site}`, { method: "DELETE" }); loadSettings(); } catch (e) { fail(e); }
   });
+  $("#hours-save").onclick = async () => {
+    const body = { enabled: $("#hours-on").checked, start: +$("#hours-start").value, end: +$("#hours-end").value };
+    try { await api("/api/settings/hours", { method: "POST", json: body }); toast("✓ Horario guardado"); }
+    catch (e) { fail(e); }
+  };
   $("#ua-mine").onclick = () => { $("#ua-input").value = navigator.userAgent; };
   $("#ua-save").onclick = async () => {
     try { await api("/api/settings/ua", { method: "POST", json: { ua: $("#ua-input").value } }); toast("✓ User-Agent guardado"); }
