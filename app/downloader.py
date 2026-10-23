@@ -153,14 +153,18 @@ def browser_ua() -> str:
     return db.get_setting("browser_ua", "") or ""
 
 
+APP_ROOT = Path(__file__).resolve().parent.parent
+
+
 def _tool(module: str) -> list[str]:
-    return [sys.executable, "-m", module]
+    # gallery-dl pasa por app/gdl_launch.py, que aplica arreglos aún no publicados en gallery-dl
+    return [sys.executable, "-m", "app.gdl_launch" if module == "gallery_dl" else module]
 
 
 def _env() -> dict:
     env = dict(os.environ)
-    if PYUPD.exists():
-        env["PYTHONPATH"] = str(PYUPD) + os.pathsep + env.get("PYTHONPATH", "")
+    paths = [str(PYUPD)] if PYUPD.exists() else []  # versión actualizada de gallery-dl / yt-dlp primero
+    env["PYTHONPATH"] = os.pathsep.join(paths + [str(APP_ROOT)] + [p for p in [env.get("PYTHONPATH")] if p])
     return env
 
 
