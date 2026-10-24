@@ -14,6 +14,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from fastapi.staticfiles import StaticFiles
 
 from . import bot, cobalt, config, frames, library, tgreview, worker
+from . import media as media_conv
 from .config import COOKIES, DATA, LIBRARY, UI_PASSWORD
 from .db import db, now
 from .downloader import (COOKIE_FILE, IG_DEFAULT, IG_PARTS, VERBOSE_ORIGIN, clear_cookies_bad, clear_ratelimit,
@@ -261,6 +262,39 @@ def _items_full(ids: list[int]) -> list[dict]:
                 f"LEFT JOIN subscriptions s ON s.id=i.subscription_id WHERE i.id IN ({marks})", ids)
     by_id = {r["id"]: {**_item_out(r), "sub_name": r["sub_name"], "sub_folder": r["sub_folder"]} for r in rows}
     return [by_id[i] for i in ids if i in by_id]
+
+
+@app.get("/api/items/{iid}/probe")
+async def probe_item(iid: int):
+    """Códec y duración de un vídeo (para explicar por qué el navegador no lo reproduce)."""
+    try:
+        p = library.item_path(_get_item(iid))
+    except library.PathError:
+        raise HTTPException(404, "Sin fichero")
+    codec, duration = await asyncio.to_thread(media_conv.probe, p)
+    return {"codec": codec, "duration": duration, "playable": codec in media_conv.PLAYABLE}
+
+
+@app.post("/api/items/{iid}/transcode")
+async def transcode_item(iid: int):
+    """Convierte a H.264 un vídeo que el navegador no reproduce (sustituye el archivo)."""
+    it = _get_item(iid)
+    try:
+        src = library.item_path(it)
+    except library.PathError:
+        raise HTTPException(404, "Sin fichero")
+    try:
+        out = await asyncio.to_thread(media_conv.to_h264, src, False)
+    except media_conv.TranscodeError as e:
+        raise HTTPException(400, str(e))
+    final = out.with_name(src.stem + ".mp4")
+    src.unlink(missing_ok=True)
+    out.rename(final)
+    rel = final.name if it["status"] in ("pending", "trashed") else final.relative_to(LIBRARY).as_posix()
+    db.x("UPDATE items SET file=?, size=?, orig_name=?, save_name=? WHERE id=?",
+         (rel, final.stat().st_size, Path(it["orig_name"]).stem + ".mp4",
+          Path(it["save_name"] or it["orig_name"]).stem + ".mp4", iid))
+    return _items_full([iid])[0]
 
 
 @app.post("/api/items/frame")
@@ -531,6 +565,7 @@ async def settings():
         "version": config.VERSION, "commit": config.COMMIT,
         "browser_ua": db.get_setting("browser_ua", "") or "",
         "gdl_dev": db.get_setting("gdl_channel") == "dev",
+        "transcode_auto": media_conv.auto_enabled(),
         "ext_token": ext_token(),
         "hours": dict(zip(("enabled", "start", "end"), worker.active_hours())),
         "cobalt": await cobalt.status(),
@@ -665,6 +700,12 @@ async def set_hours(enabled: bool = Body(True), start: int = Body(9), end: int =
     db.set_setting("hours_from", str(start))
     db.set_setting("hours_to", str(end))
     return {"enabled": enabled, "start": start, "end": end}
+
+
+@app.post("/api/settings/transcode")
+async def set_transcode(enabled: bool = Body(True, embed=True)):
+    db.set_setting("transcode_auto", "1" if enabled else "0")
+    return {"enabled": enabled}
 
 
 @app.post("/api/settings/gdl_channel")

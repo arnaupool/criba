@@ -237,3 +237,6 @@ pre.out { background: var(--bg); border-radius: 8px; padding: 10px; font-size: 1
 .check { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; color: var(--text); cursor: pointer; }
 .ig-sub { padding: 6px 0 2px; }
 .ig-sub .check { font-size: 13px; }
+.v-err { max-width: 420px; text-align: center; padding: 20px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; }
+.v-err p { margin: 6px 0; }
+.v-err .btn { margin-top: 10px; }

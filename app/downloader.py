@@ -15,6 +15,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from . import cobalt
+from . import media as media_conv
 from .config import ARCHIVES, COOKIES, DEVICE, DEVICE_HOURS, INBOX, PYUPD, TMP, kind_of
 from .db import db, now
 from .library import clean_name, unique_path
@@ -281,6 +282,8 @@ def _ytdlp_args(url: str, dest: Path) -> list[str]:
     args = _tool("yt_dlp") + [
         *(["-v"] if verbose_job.get() else []),
         "--no-progress", "--write-info-json", "--no-mtime", "--merge-output-format", "mp4",
+        # H.264 si la web lo ofrece: H.265/AV1 no se ven en todos los navegadores (Firefox no reproduce H.265)
+        "-S", "vcodec:h264,res,acodec:m4a",
         "--playlist-end", "50", "-o", str(dest / "%(title).80B [%(id)s].%(ext)s"),
     ]
     if c := cookies_for(url):
@@ -610,6 +613,15 @@ def ingest(folder: Path, source: str, source_url: str | None, job_id: int | None
             continue
         for k, v in (defaults or {}).items():
             m[k] = m.get(k) or v
+        if kind_of(media.name) == "video" and media_conv.auto_enabled() and media_conv.needs_transcode(media):
+            # H.265 y similares no se ven en Firefox (ni en Chrome/Windows): a H.264. El sha256 sigue siendo
+            # el del original, para reconocer el mismo vídeo si se vuelve a descargar.
+            try:
+                conv = media_conv.to_h264(media)
+                media.unlink(missing_ok=True)
+                media = conv.rename(media.with_suffix(".mp4"))
+            except media_conv.TranscodeError as e:
+                log.warning("No se convirtió %s: %s", media.name, e)
         iid = db.x(
             """INSERT INTO items(file, orig_name, save_name, kind, size, sha256, source, source_url, post_url,
                                  author, caption, posted_at, subscription_id, job_id, created_at)

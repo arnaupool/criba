@@ -314,11 +314,15 @@ function showItem(i) {
   const it = S.items[i];
   V.media.style.transform = ""; V.media.style.opacity = "";
   $$(".v-stamp").forEach(s => s.style.opacity = 0);
+  // ?v=tamaño: si el archivo cambia (p. ej. tras convertirlo) el navegador no usa la copia vieja de su caché
   V.media.innerHTML = it.kind === "video"
-    ? `<video src="/api/media/${it.id}" controls loop playsinline preload="auto" poster="/api/thumb/${it.id}"></video>`
-    : `<img src="/api/media/${it.id}" alt="" draggable="false">`;
+    ? `<video src="/api/media/${it.id}?v=${it.size}" controls loop playsinline preload="auto" poster="/api/thumb/${it.id}"></video>`
+    : `<img src="/api/media/${it.id}?v=${it.size}" alt="" draggable="false">`;
   const v = $("video", V.media);
-  if (v) v.play().catch(() => { v.muted = true; v.play().catch(() => {}); });
+  if (v) {
+    v.addEventListener("error", () => videoError(it, v));
+    v.play().catch(() => { v.muted = true; v.play().catch(() => {}); });
+  }
   // precarga de la siguiente imagen
   const nx = S.items[i + 1];
   if (nx && nx.kind === "image") new Image().src = `/api/media/${nx.id}`;
@@ -349,6 +353,35 @@ function showItem(i) {
   renderQuick(it, pend);
   $("#v-prev").disabled = i === 0;
   $("#v-next").disabled = i >= S.items.length - 1;
+}
+
+// Vídeo que no se reproduce: explicar por qué (formato o red) y ofrecer arreglo
+async function videoError(it, v) {
+  const code = v.error?.code;  // 2 = red, 3 = no se pudo decodificar, 4 = formato no soportado
+  let codec = null;
+  try { codec = (await api(`/api/items/${it.id}/probe`)).codec; } catch (e) { /* sin datos */ }
+  if (S.items[S.idx]?.id !== it.id) return;  // ya se ha pasado a otro
+  const format = code === 3 || code === 4 || (codec && codec !== "h264");
+  const box = document.createElement("div");
+  box.className = "v-err";
+  box.innerHTML = format
+    ? `<p>Este navegador no puede reproducir el vídeo${codec ? ` (formato <b>${esc(codec.toUpperCase())}</b>)` : ""}.</p>
+       <p class="muted small">Convertirlo a H.264 hace que se vea en cualquier navegador y en el iPhone.</p>
+       <button class="btn primary" data-fix="convert">Convertir para verlo</button>`
+    : `<p>Ha fallado la descarga del vídeo (error de red${code ? ` ${code}` : ""}).</p>
+       <p class="muted small">Suele ser la conexión (VPN, datos móviles…). El archivo está bien${codec ? ` (${esc(codec)})` : ""}.</p>
+       <button class="btn primary" data-fix="retry">Reintentar</button>`;
+  V.media.replaceChildren(box);
+  box.querySelector("[data-fix]").onclick = async e => {
+    if (e.target.dataset.fix === "retry") return showItem(S.idx);
+    e.target.disabled = true; e.target.textContent = "Convirtiendo… (puede tardar un poco)";
+    try {
+      const nuevo = await api(`/api/items/${it.id}/transcode`, { method: "POST" });
+      const k = S.items.findIndex(x => x.id === it.id);
+      if (k >= 0) { S.items[k] = { ...S.items[k], ...nuevo }; if (k === S.idx) showItem(k); }
+      toast("✓ Convertido a H.264");
+    } catch (err) { fail(err); e.target.disabled = false; e.target.textContent = "Convertir para verlo"; }
+  };
 }
 
 let recentCache = [];
@@ -1011,6 +1044,8 @@ async function loadSettings() {
 
     <div class="card"><h2>Descargadores</h2>
       <p class="hint" style="margin-top:0">gallery-dl y yt-dlp se actualizan solos al arrancar el contenedor. Si un sitio deja de funcionar, actualiza a mano.</p>
+      <label class="radio" style="margin-bottom:6px"><input type="checkbox" id="transcode-auto" ${s.transcode_auto ? "checked" : ""}>
+        Convertir a H.264 los vídeos que no lo son (H.265 de TikTok, etc.) para verlos en cualquier navegador</label>
       <label class="radio" style="margin-bottom:6px"><input type="checkbox" id="gdl-dev" ${s.gdl_dev ? "checked" : ""}>
         gallery-dl en desarrollo: trae antes los arreglos cuando Instagram cambia algo (puede ser menos estable)</label>
       <p id="versions" class="muted">${esc(s.versions || "")}</p>
@@ -1062,6 +1097,10 @@ async function loadSettings() {
     const site = $("#other-site").value.trim();
     if (!site) { toast("Escribe primero el dominio"); return; }
     uploadCookies(site, e.target.files[0]);
+  };
+  $("#transcode-auto").onchange = async e => {
+    try { await api("/api/settings/transcode", { method: "POST", json: { enabled: e.target.checked } }); toast("✓ Guardado"); }
+    catch (err) { fail(err); }
   };
   $("#gdl-dev").onchange = async e => {
     try {
