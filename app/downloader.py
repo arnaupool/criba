@@ -154,6 +154,17 @@ def browser_ua() -> str:
     return db.get_setting("browser_ua", "") or ""
 
 
+def browser_family() -> str:
+    """Navegador que imitar (cabeceras y TLS), a juego con el User-Agent guardado: firefox o chrome."""
+    ua = browser_ua().lower()
+    return "chrome" if "chrome" in ua and "firefox" not in ua else "firefox"
+
+
+# Reddit bloquea desde el 21-oct-2026 lo que no parece un navegador («You've been blocked by network
+# security»), aunque lleve cookies: hay que imitar uno (https://codeberg.org/mikf/gallery-dl/issues/550)
+IMPERSONATE_SITES = {"reddit"}
+
+
 APP_ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -253,6 +264,10 @@ def _gdl_args(url: str, dest: Path) -> list[str]:
         args += ["--cookies", str(c)]
         if ua := browser_ua():  # las cookies van ligadas al navegador del que salieron
             args += ["-o", f"user-agent={ua}"]
+    if (site := site_of(url)) in IMPERSONATE_SITES:
+        b = browser_family()
+        args += ["-o", f"extractor.{site}.browser={b}",  # cabeceras y cifrado TLS de ese navegador
+                 "-o", f'extractor.{site}.ytdl.cmdline-args=["--impersonate", "{b}"]']  # vídeos vía yt-dlp
     if site_of(url) == "instagram":
         # Por defecto solo prueba «web» y «search»; si Instagram corta esas dos dice «user could not
         # be found» aunque exista. «info» (la API de perfil) suele responder con sesión iniciada.
@@ -284,11 +299,16 @@ def _ytdlp_args(url: str, dest: Path) -> list[str]:
         "--no-progress", "--write-info-json", "--no-mtime", "--merge-output-format", "mp4",
         # H.264 si la web lo ofrece: H.265/AV1 no se ven en todos los navegadores (Firefox no reproduce H.265)
         "-S", "vcodec:h264,res,acodec:m4a",
+        # YouTube necesita ejecutar JavaScript; la imagen ya trae Node (por cobalt)
+        *(["--js-runtimes", "node"] if shutil.which("node") else []),
         "--playlist-end", "50", "-o", str(dest / "%(title).80B [%(id)s].%(ext)s"),
     ]
+    impersonate = site_of(url) in IMPERSONATE_SITES
+    if impersonate:  # necesita curl-cffi (va en la imagen); pone sus propias cabeceras de navegador
+        args += ["--impersonate", browser_family()]
     if c := cookies_for(url):
         args += ["--cookies", str(c)]
-        if ua := browser_ua():
+        if (ua := browser_ua()) and not impersonate:
             args += ["--user-agent", ua]
     return args + [url]
 

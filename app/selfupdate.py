@@ -18,7 +18,7 @@ def gdl_dev() -> bool:
 
 def command() -> list[str]:
     return [sys.executable, "-m", "pip", "install", "--no-cache-dir", "--disable-pip-version-check", "-q", "-U",
-            "--target", str(PYUPD), GDL_DEV if gdl_dev() else "gallery-dl", "yt-dlp[default]"]
+            "--target", str(PYUPD), GDL_DEV if gdl_dev() else "gallery-dl", "yt-dlp[default,curl-cffi]"]
 
 
 if __name__ == "__main__":
