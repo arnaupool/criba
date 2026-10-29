@@ -3,11 +3,11 @@
 const B = globalThis.browser ?? globalThis.chrome;
 
 // cookie que indica sesión iniciada: sin ella no se envía nada
-const SITES = { "instagram.com": "sessionid", "x.com": "auth_token" };
+const SITES = { "instagram.com": "sessionid", "x.com": "auth_token", "reddit.com": "reddit_session" };
 const PERIODIC_MIN = 720; // por si algún cambio se escapara: revisión cada 12 h
 
 async function config() {
-  const { url = "", token = "", sites = { "instagram.com": true, "x.com": false }, auto = true } =
+  const { url = "", token = "", sites = { "instagram.com": true, "x.com": false, "reddit.com": false }, auto = true } =
     await B.storage.local.get(["url", "token", "sites", "auto"]);
   return { url: url.replace(/\/+$/, ""), token, sites, auto };
 }

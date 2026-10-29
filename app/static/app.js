@@ -1006,7 +1006,7 @@ async function loadSettings() {
     </div>
 
     <div class="card"><h2>Extensión del navegador</h2>
-      <p class="hint" style="margin-top:0">La extensión «Criba · cookies» manda solas las cookies de Instagram y X cuando cambian
+      <p class="hint" style="margin-top:0">La extensión «Criba · cookies» manda solas las cookies de Instagram, X y Reddit cuando cambian
       (por ejemplo, al volver a iniciar sesión), y también el User-Agent. Instálala solo en el perfil del navegador
       donde tengas la cuenta secundaria.</p>
       <div class="row"><input id="ext-token" readonly value="${esc(s.ext_token)}" placeholder="sin token todavía"></div>

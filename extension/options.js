@@ -3,10 +3,11 @@ const $ = id => document.getElementById(id);
 const say = (text, ok = true) => { $("msg").textContent = text; $("msg").className = ok ? "ok" : "bad"; };
 
 async function load() {
-  const { url = "", token = "", sites = { "instagram.com": true, "x.com": false }, auto = true } =
+  const { url = "", token = "", sites = { "instagram.com": true, "x.com": false, "reddit.com": false }, auto = true } =
     await B.storage.local.get(["url", "token", "sites", "auto"]);
   $("url").value = url; $("token").value = token;
   $("site-instagram").checked = !!sites["instagram.com"]; $("site-x").checked = !!sites["x.com"];
+  $("site-reddit").checked = !!sites["reddit.com"];
   $("auto").checked = auto;
 }
 
@@ -22,7 +23,8 @@ $("save").onclick = async () => {
   if (!granted) return say("Sin permiso para conectar con esa dirección no se pueden enviar las cookies", false);
   await B.storage.local.set({
     url: o, token: $("token").value.trim(), auto: $("auto").checked,
-    sites: { "instagram.com": $("site-instagram").checked, "x.com": $("site-x").checked },
+    sites: { "instagram.com": $("site-instagram").checked, "x.com": $("site-x").checked,
+             "reddit.com": $("site-reddit").checked },
   });
   say("✓ Guardado");
 };

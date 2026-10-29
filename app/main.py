@@ -605,7 +605,7 @@ def _save_cookies(site: str, text: str):
 # La extensión «Criba · cookies» manda las cookies de Instagram / X cuando cambian. Se identifica con un
 # token (Ajustes), no con la sesión de la web, así que estas rutas quedan fuera del inicio de sesión.
 
-EXT_SITES = {"instagram.com", "x.com"}
+EXT_SITES = {"instagram.com", "x.com", "reddit.com"}
 EXT_CORS = {"Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "Content-Type, X-Criba-Token",
             "Access-Control-Allow-Methods": "GET, POST, OPTIONS"}
 
@@ -728,7 +728,7 @@ async def resume_site(site: str):
 
 
 # Cookie que indica sesión iniciada en cada sitio (sin ella las cookies no sirven)
-SESSION_COOKIE = {"instagram.com": "sessionid", "x.com": "auth_token"}
+SESSION_COOKIE = {"instagram.com": "sessionid", "x.com": "auth_token", "reddit.com": "reddit_session"}
 
 
 @app.delete("/api/cookies/{site}")
